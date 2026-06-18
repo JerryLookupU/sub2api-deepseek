@@ -1327,7 +1327,7 @@
 
       <!-- OpenAI 自动透传开关（OAuth/API Key） -->
       <div
-        v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'apikey')"
+        v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'apikey') && openaiUpstreamProtocol !== 'anthropic_responses'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between">
@@ -1415,9 +1415,27 @@
         </div>
       </div>
 
+      <!-- OpenAI API Key 上游协议：Response API / Responses→Anthropic 转换 -->
+      <div
+        v-if="account?.platform === 'openai' && account?.type === 'apikey'"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="flex items-center justify-between">
+          <div>
+            <label class="input-label mb-0">{{ t('admin.accounts.openai.upstreamProtocol') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.upstreamProtocolDesc') }}
+            </p>
+          </div>
+          <div class="w-52">
+            <Select v-model="openaiUpstreamProtocol" :options="openAIUpstreamProtocolOptions" />
+          </div>
+        </div>
+      </div>
+
       <!-- OpenAI WS Mode 三态（off/ctx_pool/passthrough） -->
       <div
-        v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'apikey')"
+        v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'apikey') && openaiUpstreamProtocol !== 'anthropic_responses'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between">
@@ -2578,6 +2596,12 @@ const customBaseUrl = ref('')
 
 // OpenAI 自动透传开关（OAuth/API Key）
 const openaiPassthroughEnabled = ref(false)
+// OpenAI API Key 上游协议：'' = Response API；'anthropic_responses' = Responses→Anthropic /v1/messages 转换
+const openaiUpstreamProtocol = ref<'' | 'anthropic_responses'>('')
+const openAIUpstreamProtocolOptions = computed(() => [
+  { value: '', label: t('admin.accounts.types.responsesApi') },
+  { value: 'anthropic_responses', label: t('admin.accounts.types.anthropicResponses') }
+])
 const openAICompactMode = ref<OpenAICompactMode>('auto')
 const openAIResponsesMode = ref<OpenAIResponsesMode>('auto')
 const openAIEndpointCapabilities = ref<OpenAIEndpointCapability[]>(['chat_completions', 'embeddings'])
@@ -2954,6 +2978,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 
   // Load OpenAI passthrough toggle (OpenAI OAuth/API Key)
   openaiPassthroughEnabled.value = false
+  openaiUpstreamProtocol.value = ''
   openAICompactMode.value = 'auto'
   openAIResponsesMode.value = 'auto'
   openAIEndpointCapabilities.value = ['chat_completions', 'embeddings']
@@ -2967,6 +2992,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   webSearchEmulationMode.value = 'default'
   if (newAccount.platform === 'openai' && (newAccount.type === 'oauth' || newAccount.type === 'apikey')) {
     openaiPassthroughEnabled.value = extra?.openai_passthrough === true || extra?.openai_oauth_passthrough === true
+    openaiUpstreamProtocol.value = newAccount.type === 'apikey' && extra?.openai_upstream_protocol === 'anthropic_responses' ? 'anthropic_responses' : ''
     openAICompactMode.value = (extra?.openai_compact_mode as OpenAICompactMode) || 'auto'
     if (newAccount.type === 'apikey') {
       openAIResponsesMode.value = normalizeOpenAIResponsesMode(extra?.openai_responses_mode)
@@ -4091,6 +4117,11 @@ const handleSubmit = async () => {
       } else {
         delete newExtra.openai_passthrough
         delete newExtra.openai_oauth_passthrough
+      }
+      if (props.account.type === 'apikey' && openaiUpstreamProtocol.value === 'anthropic_responses') {
+        newExtra.openai_upstream_protocol = 'anthropic_responses'
+      } else {
+        delete newExtra.openai_upstream_protocol
       }
       if (openAICompactMode.value === 'auto') {
         delete newExtra.openai_compact_mode

@@ -39,6 +39,15 @@ func TestGetBaseURL(t *testing.T) {
 			expected: "https://custom.example.com",
 		},
 		{
+			name: "kimi apikey without base_url returns default kimi coding",
+			account: Account{
+				Type:        AccountTypeAPIKey,
+				Platform:    PlatformKimi,
+				Credentials: map[string]any{},
+			},
+			expected: KimiDefaultBaseURL,
+		},
+		{
 			name: "antigravity apikey auto-appends /antigravity",
 			account: Account{
 				Type:        AccountTypeAPIKey,

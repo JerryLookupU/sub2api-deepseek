@@ -103,7 +103,7 @@ func TestAPIKeyRepository_UpdateLastUsedDeletedKey(t *testing.T) {
 
 	key := &service.APIKey{
 		UserID: user.ID,
-		Key:    "sk-update-last-used-deleted",
+		Key:    "test-key-update-last-used-deleted",
 		Name:   "UpdateLastUsedDeleted",
 		Status: service.StatusActive,
 	}
@@ -121,7 +121,7 @@ func TestAPIKeyRepository_UpdateLastUsedDBError(t *testing.T) {
 
 	key := &service.APIKey{
 		UserID: user.ID,
-		Key:    "sk-update-last-used-db-error",
+		Key:    "test-key-update-last-used-db-error",
 		Name:   "UpdateLastUsedDBError",
 		Status: service.StatusActive,
 	}

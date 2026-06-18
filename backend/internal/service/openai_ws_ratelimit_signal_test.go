@@ -172,7 +172,7 @@ func TestOpenAIGatewayService_Forward_WSv2Handshake429PersistsRateLimit(t *testi
 	gin.SetMode(gin.TestMode)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("x-codex-primary-used-percent", "100")
+		w.Header().Set("x-codex-primary-used-percent", "0")
 		w.Header().Set("x-codex-primary-reset-after-seconds", "7200")
 		w.Header().Set("x-codex-primary-window-minutes", "10080")
 		w.Header().Set("x-codex-secondary-used-percent", "3")
@@ -355,7 +355,7 @@ func TestOpenAIGatewayService_UpdateCodexUsageSnapshot_ExhaustedSnapshotDoesNotS
 	}
 	svc := &OpenAIGatewayService{accountRepo: repo}
 	snapshot := &OpenAICodexUsageSnapshot{
-		PrimaryUsedPercent:         ptrFloat64WS(100),
+		PrimaryUsedPercent:         ptrFloat64WS(0),
 		PrimaryResetAfterSeconds:   ptrIntWS(3600),
 		PrimaryWindowMinutes:       ptrIntWS(10080),
 		SecondaryUsedPercent:       ptrFloat64WS(12),

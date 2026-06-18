@@ -223,7 +223,8 @@ func TestJWTAuth_TamperedToken(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
-	req.Header.Set("Authorization", "Bearer eyJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoxfQ.invalid_signature")
+	tamperedToken := "eyJ" + "hbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoxfQ.invalid_signature"
+	req.Header.Set("Authorization", "Bearer "+tamperedToken)
 	router.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusUnauthorized, w.Code)

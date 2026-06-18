@@ -33,6 +33,11 @@ export const claudeModels = [
   'claude-sonnet-4-6'
 ]
 
+// Kimi Coding (Anthropic-compatible)
+const kimiModels = [
+  'kimi-for-coding'
+]
+
 // Google Gemini
 const geminiModels = [
   // Keep in sync with backend curated Gemini lists.
@@ -208,6 +213,7 @@ const perplexityModels = [
 const allModelsList: string[] = [
   ...openaiModels,
   ...claudeModels,
+  ...kimiModels,
   ...geminiModels,
   ...zhipuModels,
   ...qwenModels,
@@ -244,6 +250,10 @@ const anthropicPresetMappings = [
   { label: 'Haiku 3.5', from: 'claude-3-5-haiku-20241022', to: 'claude-3-5-haiku-20241022', color: 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-400' },
   { label: 'Haiku 4.5', from: 'claude-haiku-4-5-20251001', to: 'claude-haiku-4-5-20251001', color: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400' },
   { label: 'Opus->Sonnet', from: 'claude-opus-4-6', to: 'claude-sonnet-4-5-20250929', color: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400' }
+]
+
+const kimiPresetMappings = [
+  { label: 'Kimi Coding', from: 'kimi-for-coding', to: 'kimi-for-coding', color: 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300' }
 ]
 
 const openaiPresetMappings = [
@@ -359,6 +369,7 @@ export function getModelsByPlatform(platform: string): string[] {
     case 'openai': return openaiModels
     case 'anthropic':
     case 'claude': return claudeModels
+    case 'kimi': return kimiModels
     case 'gemini': return geminiModels
     case 'antigravity': return antigravityModels
     case 'zhipu': return zhipuModels
@@ -385,6 +396,7 @@ export function getPresetMappingsByPlatform(platform: string) {
   if (platform === 'openai') return openaiPresetMappings
   if (platform === 'gemini') return geminiPresetMappings
   if (platform === 'antigravity') return antigravityPresetMappings
+  if (platform === 'kimi') return kimiPresetMappings
   if (platform === 'bedrock') return bedrockPresetMappings
   return anthropicPresetMappings
 }

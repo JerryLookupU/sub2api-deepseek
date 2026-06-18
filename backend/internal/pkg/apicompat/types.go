@@ -389,6 +389,8 @@ type ResponsesStreamEvent struct {
 
 	// response.output_item.added / response.output_item.done
 	Item *ResponsesOutput `json:"item,omitempty"`
+	// response.reasoning_summary_part.added / done
+	Part *ResponsesSummary `json:"part,omitempty"`
 
 	// response.output_text.delta / response.output_text.done
 	OutputIndex  int    `json:"output_index,omitempty"`
@@ -412,6 +414,72 @@ type ResponsesStreamEvent struct {
 
 	// Sequence number for ordering events
 	SequenceNumber int `json:"sequence_number,omitempty"`
+}
+
+func (e ResponsesStreamEvent) MarshalJSON() ([]byte, error) {
+	type alias ResponsesStreamEvent
+	b, err := json.Marshal(alias(e))
+	if err != nil {
+		return nil, err
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(b, &obj); err != nil {
+		return nil, err
+	}
+	if responsesEventNeedsOutputIndex(e.Type) {
+		obj["output_index"] = e.OutputIndex
+	}
+	if responsesEventNeedsContentIndex(e.Type) {
+		obj["content_index"] = e.ContentIndex
+	}
+	if responsesEventNeedsSummaryIndex(e.Type) {
+		obj["summary_index"] = e.SummaryIndex
+	}
+	return json.Marshal(obj)
+}
+
+func responsesEventNeedsOutputIndex(eventType string) bool {
+	switch eventType {
+	case "response.output_item.added",
+		"response.output_item.done",
+		"response.content_part.added",
+		"response.content_part.done",
+		"response.output_text.delta",
+		"response.output_text.done",
+		"response.reasoning_summary_part.added",
+		"response.reasoning_summary_part.done",
+		"response.reasoning_summary_text.delta",
+		"response.reasoning_summary_text.done",
+		"response.function_call_arguments.delta",
+		"response.function_call_arguments.done":
+		return true
+	default:
+		return false
+	}
+}
+
+func responsesEventNeedsContentIndex(eventType string) bool {
+	switch eventType {
+	case "response.content_part.added",
+		"response.content_part.done",
+		"response.output_text.delta",
+		"response.output_text.done":
+		return true
+	default:
+		return false
+	}
+}
+
+func responsesEventNeedsSummaryIndex(eventType string) bool {
+	switch eventType {
+	case "response.reasoning_summary_part.added",
+		"response.reasoning_summary_part.done",
+		"response.reasoning_summary_text.delta",
+		"response.reasoning_summary_text.done":
+		return true
+	default:
+		return false
+	}
 }
 
 // ---------------------------------------------------------------------------

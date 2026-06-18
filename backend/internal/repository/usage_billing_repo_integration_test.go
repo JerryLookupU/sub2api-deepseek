@@ -140,7 +140,7 @@ func TestUsageBillingRepositoryApply_RequestFingerprintConflict(t *testing.T) {
 	})
 	apiKey := mustCreateApiKey(t, client, &service.APIKey{
 		UserID: user.ID,
-		Key:    "sk-usage-billing-conflict-" + uuid.NewString(),
+		Key:    "test-key-usage-billing-conflict-" + uuid.NewString(),
 		Name:   "billing-conflict",
 	})
 
@@ -173,7 +173,7 @@ func TestUsageBillingRepositoryApply_UpdatesAccountQuota(t *testing.T) {
 	})
 	apiKey := mustCreateApiKey(t, client, &service.APIKey{
 		UserID: user.ID,
-		Key:    "sk-usage-billing-account-" + uuid.NewString(),
+		Key:    "test-key-usage-billing-account-" + uuid.NewString(),
 		Name:   "billing-account",
 	})
 	account := mustCreateAccount(t, client, &service.Account{
@@ -212,7 +212,7 @@ func TestUsageBillingRepositoryApply_EnqueuesSchedulerOutboxOnQuotaCrossing(t *t
 		})
 		apiKey := mustCreateApiKey(t, client, &service.APIKey{
 			UserID: user.ID,
-			Key:    "sk-usage-billing-outbox-" + uuid.NewString(),
+			Key:    "test-key-usage-billing-outbox-" + uuid.NewString(),
 			Name:   "billing-outbox",
 		})
 		account := mustCreateAccount(t, client, &service.Account{
@@ -333,7 +333,7 @@ func TestUsageBillingRepositoryApply_DeduplicatesAgainstArchivedKey(t *testing.T
 	})
 	apiKey := mustCreateApiKey(t, client, &service.APIKey{
 		UserID: user.ID,
-		Key:    "sk-usage-billing-archive-" + uuid.NewString(),
+		Key:    "test-key-usage-billing-archive-" + uuid.NewString(),
 		Name:   "billing-archive",
 	})
 

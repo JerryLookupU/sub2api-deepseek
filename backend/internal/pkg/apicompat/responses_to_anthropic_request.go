@@ -15,6 +15,7 @@ func ResponsesToAnthropicRequest(req *ResponsesRequest) (*AnthropicRequest, erro
 	if err != nil {
 		return nil, err
 	}
+	system = mergeResponsesInstructionsIntoAnthropicSystem(req.Instructions, system)
 
 	out := &AnthropicRequest{
 		Model:       req.Model,
@@ -114,15 +115,17 @@ func convertResponsesInputToAnthropic(inputRaw json.RawMessage) (json.RawMessage
 	}
 
 	var system json.RawMessage
+	var systemTexts []string
 	var messages []AnthropicMessage
 
 	for _, item := range items {
+		role := strings.ToLower(strings.TrimSpace(item.Role))
 		switch {
-		case item.Role == "system":
-			// System prompt → Anthropic system field
+		case role == "system" || role == "developer":
+			// OpenAI developer/system messages map to Anthropic's system field.
 			text := extractTextFromContent(item.Content)
 			if text != "" {
-				system, _ = json.Marshal(text)
+				systemTexts = append(systemTexts, text)
 			}
 
 		case item.Type == "function_call":
@@ -161,7 +164,7 @@ func convertResponsesInputToAnthropic(inputRaw json.RawMessage) (json.RawMessage
 				Content: blockJSON,
 			})
 
-		case item.Role == "user":
+		case role == "user":
 			content, err := convertResponsesUserToAnthropicContent(item.Content)
 			if err != nil {
 				return nil, nil, err
@@ -171,7 +174,7 @@ func convertResponsesInputToAnthropic(inputRaw json.RawMessage) (json.RawMessage
 				Content: content,
 			})
 
-		case item.Role == "assistant":
+		case role == "assistant":
 			content, err := convertResponsesAssistantToAnthropicContent(item.Content)
 			if err != nil {
 				return nil, nil, err
@@ -194,8 +197,26 @@ func convertResponsesInputToAnthropic(inputRaw json.RawMessage) (json.RawMessage
 
 	// Merge consecutive same-role messages (Anthropic requires alternating roles)
 	messages = mergeConsecutiveMessages(messages)
+	if len(systemTexts) > 0 {
+		system, _ = json.Marshal(strings.Join(systemTexts, "\n\n"))
+	}
 
 	return system, messages, nil
+}
+
+func mergeResponsesInstructionsIntoAnthropicSystem(instructions string, system json.RawMessage) json.RawMessage {
+	var parts []string
+	if text := strings.TrimSpace(instructions); text != "" {
+		parts = append(parts, text)
+	}
+	if text := strings.TrimSpace(extractTextFromContent(system)); text != "" {
+		parts = append(parts, text)
+	}
+	if len(parts) == 0 {
+		return system
+	}
+	merged, _ := json.Marshal(strings.Join(parts, "\n\n"))
+	return merged
 }
 
 // extractTextFromContent extracts text from a content field that may be a
@@ -401,13 +422,22 @@ func convertResponsesToAnthropicTools(tools []ResponsesTool) []AnthropicTool {
 				Description: t.Description,
 				InputSchema: normalizeAnthropicInputSchema(t.Parameters),
 			})
+		case "namespace":
+			// Responses namespaces need namespace-aware tool call results. Anthropic
+			// custom tools only carry a flat name, so forwarding namespaces breaks
+			// Anthropic-compatible upstreams such as DeepSeek.
+			continue
 		default:
-			// Pass through unknown tool types
+			// Unknown Responses tool types are represented as Anthropic custom tools
+			// when they have a callable name. Do not forward the Responses type:
+			// Anthropic validates server-tool type values strictly.
+			if t.Name == "" {
+				continue
+			}
 			out = append(out, AnthropicTool{
-				Type:        t.Type,
 				Name:        t.Name,
 				Description: t.Description,
-				InputSchema: t.Parameters,
+				InputSchema: normalizeAnthropicInputSchema(t.Parameters),
 			})
 		}
 	}

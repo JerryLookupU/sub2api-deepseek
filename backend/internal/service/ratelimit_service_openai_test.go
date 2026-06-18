@@ -15,10 +15,10 @@ import (
 func TestCalculateOpenAI429ResetTime_7dExhausted(t *testing.T) {
 	svc := &RateLimitService{}
 
-	// Simulate headers when 7d limit is exhausted (100% used)
+	// Simulate headers when 7d limit is exhausted (0% remaining -> 100% used)
 	// Primary = 7d (10080 minutes), Secondary = 5h (300 minutes)
 	headers := http.Header{}
-	headers.Set("x-codex-primary-used-percent", "100")
+	headers.Set("x-codex-primary-used-percent", "0")
 	headers.Set("x-codex-primary-reset-after-seconds", "384607") // ~4.5 days
 	headers.Set("x-codex-primary-window-minutes", "10080")       // 7 days
 	headers.Set("x-codex-secondary-used-percent", "3")
@@ -46,7 +46,7 @@ func TestCalculateOpenAI429ResetTime_7dExhausted(t *testing.T) {
 func TestCalculateOpenAI429ResetTime_5hExhausted(t *testing.T) {
 	svc := &RateLimitService{}
 
-	// Simulate headers when 5h limit is exhausted (100% used)
+	// Simulate headers when 5h limit is exhausted (0% remaining -> 100% used)
 	headers := http.Header{}
 	headers.Set("x-codex-primary-used-percent", "50")
 	headers.Set("x-codex-primary-reset-after-seconds", "500000")
@@ -177,7 +177,7 @@ func TestHandle429_OpenAIPersistsCodexSnapshotImmediately(t *testing.T) {
 	account := &Account{ID: 123, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 
 	headers := http.Header{}
-	headers.Set("x-codex-primary-used-percent", "100")
+	headers.Set("x-codex-primary-used-percent", "0")
 	headers.Set("x-codex-primary-reset-after-seconds", "604800")
 	headers.Set("x-codex-primary-window-minutes", "10080")
 	headers.Set("x-codex-secondary-used-percent", "0")
@@ -221,7 +221,7 @@ func TestHandle429_OpenAISyncsObservedPlanType(t *testing.T) {
 
 func TestNormalizedCodexLimits(t *testing.T) {
 	// Test the Normalize() method directly
-	pUsed := 100.0
+	pRemaining := 0.0
 	pReset := 384607
 	pWindow := 10080
 	sRemaining := 3.0
@@ -229,7 +229,7 @@ func TestNormalizedCodexLimits(t *testing.T) {
 	sWindow := 300
 
 	snapshot := &OpenAICodexUsageSnapshot{
-		PrimaryUsedPercent:         &pUsed,
+		PrimaryUsedPercent:         &pRemaining,
 		PrimaryResetAfterSeconds:   &pReset,
 		PrimaryWindowMinutes:       &pWindow,
 		SecondaryUsedPercent:       &sRemaining,
@@ -259,11 +259,11 @@ func TestNormalizedCodexLimits(t *testing.T) {
 
 func TestNormalizedCodexLimits_OnlyPrimaryData(t *testing.T) {
 	// Test when only primary has data, no window_minutes
-	pUsed := 80.0
+	pRemaining := 80.0
 	pReset := 50000
 
 	snapshot := &OpenAICodexUsageSnapshot{
-		PrimaryUsedPercent:       &pUsed,
+		PrimaryUsedPercent:       &pRemaining,
 		PrimaryResetAfterSeconds: &pReset,
 		// No window_minutes, no secondary data
 	}
@@ -274,8 +274,8 @@ func TestNormalizedCodexLimits_OnlyPrimaryData(t *testing.T) {
 	}
 
 	// Legacy assumption: primary=7d, secondary=5h
-	if normalized.Used7dPercent == nil || *normalized.Used7dPercent != 80.0 {
-		t.Errorf("expected Used7dPercent=80, got %v", normalized.Used7dPercent)
+	if normalized.Used7dPercent == nil || *normalized.Used7dPercent != 20.0 {
+		t.Errorf("expected Used7dPercent=20, got %v", normalized.Used7dPercent)
 	}
 	if normalized.Reset7dSeconds == nil || *normalized.Reset7dSeconds != 50000 {
 		t.Errorf("expected Reset7dSeconds=50000, got %v", normalized.Reset7dSeconds)
@@ -368,13 +368,13 @@ func TestNormalizedCodexLimits_OnlySecondaryData(t *testing.T) {
 
 func TestNormalizedCodexLimits_BothDataNoWindowMinutes(t *testing.T) {
 	// Test when both have data but no window_minutes
-	pUsed := 100.0
+	pRemaining := 0.0
 	pReset := 400000
 	sRemaining := 30.0
 	sReset := 10000
 
 	snapshot := &OpenAICodexUsageSnapshot{
-		PrimaryUsedPercent:         &pUsed,
+		PrimaryUsedPercent:         &pRemaining,
 		PrimaryResetAfterSeconds:   &pReset,
 		SecondaryUsedPercent:       &sRemaining,
 		SecondaryResetAfterSeconds: &sReset,
@@ -423,7 +423,7 @@ func TestHandle429_AnthropicPlatformUnaffected(t *testing.T) {
 
 func TestCalculateOpenAI429ResetTime_UserProvidedScenario(t *testing.T) {
 	// This is the exact scenario from the user:
-	// codex_7d_used_percent: 100
+	// upstream 7d remaining/status: 100
 	// codex_7d_reset_after_seconds: 384607 (约4.5天后重置)
 	// codex_5h_used_percent: 97 (from upstream 3% remaining)
 	// codex_5h_reset_after_seconds: 17369 (约4.8小时后重置)
@@ -449,8 +449,8 @@ func TestCalculateOpenAI429ResetTime_UserProvidedScenario(t *testing.T) {
 		t.Fatal("expected non-nil resetAt for user scenario")
 	}
 
-	// Should use the 7d reset time (384607 seconds) since 7d limit is exhausted (100%)
-	expectedDuration := 384607 * time.Second
+	// Should use the 5h reset time because 7d raw=100 means 0% used, not exhausted.
+	expectedDuration := 17369 * time.Second
 	minExpected := before.Add(expectedDuration)
 	maxExpected := after.Add(expectedDuration)
 
@@ -458,16 +458,15 @@ func TestCalculateOpenAI429ResetTime_UserProvidedScenario(t *testing.T) {
 		t.Errorf("resetAt %v not in expected range [%v, %v]", resetAt, minExpected, maxExpected)
 	}
 
-	// Verify it's approximately 4.45 days (384607 seconds)
+	// Verify it's approximately 4.8 hours (17369 seconds)
 	duration := resetAt.Sub(before)
-	actualDays := duration.Hours() / 24.0
+	actualHours := duration.Hours()
 
-	// 384607 / 86400 = ~4.45 days
-	if actualDays < 4.4 || actualDays > 4.5 {
-		t.Errorf("expected ~4.45 days, got %.2f days", actualDays)
+	if actualHours < 4.8 || actualHours > 4.9 {
+		t.Errorf("expected ~4.8 hours, got %.2f hours", actualHours)
 	}
 
-	t.Logf("User scenario: reset_at=%v, duration=%.2f days", resetAt, actualDays)
+	t.Logf("User scenario: reset_at=%v, duration=%.2f hours", resetAt, actualHours)
 }
 
 func TestCalculateOpenAI429ResetTime_5MinFallbackWhenNoReset(t *testing.T) {

@@ -111,6 +111,9 @@ backend/data/
 backend/config.yaml
 deploy/config.yaml
 backend/.installed
+port-registry.py
+start-sub2api.sh
+stop-sub2api.sh
 
 # ===================
 # 其他
@@ -119,6 +122,9 @@ tests
 CLAUDE.md
 .claude
 scripts
+!scripts/
+scripts/*
+!scripts/reload-sub2api-backend-codex-models.sh
 .code-review-state
 #openspec/
 code-reviews/
@@ -131,6 +137,7 @@ docs/*
 !docs/PAYMENT.md
 !docs/PAYMENT_CN.md
 !docs/ADMIN_PAYMENT_INTEGRATION_API.md
+!docs/CODEX_DEEPSEEK_MODEL_CATALOG_REPORT.md
 .serena/
 .codex/
 frontend/coverage/

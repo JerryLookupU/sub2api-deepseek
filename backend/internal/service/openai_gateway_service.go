@@ -126,15 +126,18 @@ type NormalizedCodexLimits struct {
 	Window7dMinutes *int
 }
 
-func normalizeCodexFiveHourUsedPercent(raw *float64) *float64 {
+func normalizeCodexUsedPercentFromRemaining(raw *float64) *float64 {
 	if raw == nil {
 		return nil
 	}
-	// OpenAI's 5h Codex quota header is remaining%, despite the upstream header
-	// name saying "used"; the canonical codex_5h_used_percent field stores used%.
+	// OpenAI's Codex quota headers expose remaining%, despite the upstream header
+	// name saying "used"; canonical codex_*_used_percent fields store used%.
 	used := 100 - *raw
 	if used < 0 {
 		used = 0
+	}
+	if used > 100 {
+		used = 100
 	}
 	return &used
 }
@@ -197,17 +200,17 @@ func (s *OpenAICodexUsageSnapshot) Normalize() *NormalizedCodexLimits {
 
 	// Assign values
 	if use5hFromPrimary {
-		result.Used5hPercent = normalizeCodexFiveHourUsedPercent(s.PrimaryUsedPercent)
+		result.Used5hPercent = normalizeCodexUsedPercentFromRemaining(s.PrimaryUsedPercent)
 		result.Reset5hSeconds = s.PrimaryResetAfterSeconds
 		result.Window5hMinutes = s.PrimaryWindowMinutes
-		result.Used7dPercent = s.SecondaryUsedPercent
+		result.Used7dPercent = normalizeCodexUsedPercentFromRemaining(s.SecondaryUsedPercent)
 		result.Reset7dSeconds = s.SecondaryResetAfterSeconds
 		result.Window7dMinutes = s.SecondaryWindowMinutes
 	} else if use7dFromPrimary {
-		result.Used7dPercent = s.PrimaryUsedPercent
+		result.Used7dPercent = normalizeCodexUsedPercentFromRemaining(s.PrimaryUsedPercent)
 		result.Reset7dSeconds = s.PrimaryResetAfterSeconds
 		result.Window7dMinutes = s.PrimaryWindowMinutes
-		result.Used5hPercent = normalizeCodexFiveHourUsedPercent(s.SecondaryUsedPercent)
+		result.Used5hPercent = normalizeCodexUsedPercentFromRemaining(s.SecondaryUsedPercent)
 		result.Reset5hSeconds = s.SecondaryResetAfterSeconds
 		result.Window5hMinutes = s.SecondaryWindowMinutes
 	}
@@ -1528,13 +1531,86 @@ func openAIQuotaWindowReset(extra map[string]any, window string, now time.Time) 
 }
 
 func readOpenAIQuotaUsedPercent(extra map[string]any, window string) float64 {
-	if len(extra) == 0 {
-		return 0
-	}
-	if value, ok := resolveAccountExtraNumber(extra, "codex_"+window+"_used_percent"); ok {
+	if value, ok := resolveOpenAICodexUsedPercentFromExtra(extra, window); ok {
 		return value
 	}
 	return 0
+}
+
+func resolveOpenAICodexUsedPercentFromExtra(extra map[string]any, window string) (float64, bool) {
+	if len(extra) == 0 {
+		return 0, false
+	}
+	if value, ok := resolveOpenAICodexUsedPercentFromRawSnapshot(extra, window); ok {
+		return value, true
+	}
+	if value, ok := resolveAccountExtraNumber(extra, "codex_"+window+"_used_percent"); ok {
+		return value, true
+	}
+	return 0, false
+}
+
+func resolveOpenAICodexUsedPercentFromRawSnapshot(extra map[string]any, window string) (float64, bool) {
+	snapshot := openAICodexUsageSnapshotFromExtra(extra)
+	normalized := snapshot.Normalize()
+	if normalized == nil {
+		return 0, false
+	}
+	switch window {
+	case "5h":
+		if normalized.Used5hPercent != nil {
+			return *normalized.Used5hPercent, true
+		}
+	case "7d":
+		if normalized.Used7dPercent != nil {
+			return *normalized.Used7dPercent, true
+		}
+	}
+	return 0, false
+}
+
+func openAICodexUsageSnapshotFromExtra(extra map[string]any) *OpenAICodexUsageSnapshot {
+	if len(extra) == 0 {
+		return nil
+	}
+	snapshot := &OpenAICodexUsageSnapshot{}
+	hasData := false
+	if value, ok := resolveAccountExtraNumber(extra, "codex_primary_used_percent"); ok {
+		snapshot.PrimaryUsedPercent = &value
+		hasData = true
+	}
+	if value, ok := resolveAccountExtraInt(extra, "codex_primary_reset_after_seconds"); ok {
+		snapshot.PrimaryResetAfterSeconds = &value
+		hasData = true
+	}
+	if value, ok := resolveAccountExtraInt(extra, "codex_primary_window_minutes"); ok {
+		snapshot.PrimaryWindowMinutes = &value
+		hasData = true
+	}
+	if value, ok := resolveAccountExtraNumber(extra, "codex_secondary_used_percent"); ok {
+		snapshot.SecondaryUsedPercent = &value
+		hasData = true
+	}
+	if value, ok := resolveAccountExtraInt(extra, "codex_secondary_reset_after_seconds"); ok {
+		snapshot.SecondaryResetAfterSeconds = &value
+		hasData = true
+	}
+	if value, ok := resolveAccountExtraInt(extra, "codex_secondary_window_minutes"); ok {
+		snapshot.SecondaryWindowMinutes = &value
+		hasData = true
+	}
+	if !hasData {
+		return nil
+	}
+	return snapshot
+}
+
+func resolveAccountExtraInt(extra map[string]any, key string) (int, bool) {
+	value, ok := resolveAccountExtraNumber(extra, key)
+	if !ok {
+		return 0, false
+	}
+	return int(value), true
 }
 
 type openAIQuotaAutoPauseCtxKey struct{}
@@ -2365,6 +2441,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	requestView := newOpenAIRequestView(body)
 	reqModel, reqStream, promptCacheKey := requestView.Model, requestView.Stream, requestView.PromptCacheKey
 	originalModel := reqModel
+
+	if account.IsOpenAIAnthropicResponsesAPIKey() {
+		return s.forwardResponsesViaAnthropicResponses(ctx, c, account, body)
+	}
 
 	if account.Type == AccountTypeAPIKey && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
 		return s.forwardResponsesViaRawChatCompletions(ctx, c, account, body)

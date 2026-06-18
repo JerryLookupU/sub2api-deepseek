@@ -9928,22 +9928,28 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 		accounts = filtered
 	}
 
-	// Collect unique models from all accounts
+	// Collect unique models from all accounts. Both explicit model_mapping keys
+	// and upstream-discovered models count as available signals, so groups whose
+	// accounts are probeable auto-list models with zero manual catalog config.
 	modelSet := make(map[string]struct{})
-	hasAnyMapping := false
+	hasAnySignal := false
 
 	for _, acc := range accounts {
 		mapping := acc.GetModelMapping()
 		if len(mapping) > 0 {
-			hasAnyMapping = true
+			hasAnySignal = true
 			for model := range mapping {
 				modelSet[model] = struct{}{}
 			}
 		}
+		for model := range acc.GetDiscoveredModels() {
+			hasAnySignal = true
+			modelSet[model] = struct{}{}
+		}
 	}
 
-	// If no account has model_mapping, return nil (use default)
-	if !hasAnyMapping {
+	// If no account advertises any model signal, return nil (use platform default)
+	if !hasAnySignal {
 		if s.modelsListCache != nil {
 			s.modelsListCache.Set(cacheKey, []string(nil), s.modelsListCacheTTL)
 			modelsListCacheStoreTotal.Add(1)

@@ -1062,30 +1062,27 @@ func buildCodexUsageProgressFromExtra(extra map[string]any, window string, now t
 	}
 
 	var (
-		usedPercentKey string
-		resetAfterKey  string
-		resetAtKey     string
+		resetAfterKey string
+		resetAtKey    string
 	)
 
 	switch window {
 	case "5h":
-		usedPercentKey = "codex_5h_used_percent"
 		resetAfterKey = "codex_5h_reset_after_seconds"
 		resetAtKey = "codex_5h_reset_at"
 	case "7d":
-		usedPercentKey = "codex_7d_used_percent"
 		resetAfterKey = "codex_7d_reset_after_seconds"
 		resetAtKey = "codex_7d_reset_at"
 	default:
 		return nil
 	}
 
-	usedRaw, ok := extra[usedPercentKey]
+	usedPercent, ok := resolveOpenAICodexUsedPercentFromExtra(extra, window)
 	if !ok {
 		return nil
 	}
 
-	progress := &UsageProgress{Utilization: parseExtraFloat64(usedRaw)}
+	progress := &UsageProgress{Utilization: usedPercent}
 	if resetAtRaw, ok := extra[resetAtKey]; ok {
 		if resetAt, err := parseTime(fmt.Sprint(resetAtRaw)); err == nil {
 			progress.ResetsAt = &resetAt

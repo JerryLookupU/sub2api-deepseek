@@ -70,7 +70,7 @@ func TestExtractOpenAICodexProbeUpdatesAccepts429WithCodexHeaders(t *testing.T) 
 	t.Parallel()
 
 	headers := make(http.Header)
-	headers.Set("x-codex-primary-used-percent", "100")
+	headers.Set("x-codex-primary-used-percent", "0")
 	headers.Set("x-codex-primary-reset-after-seconds", "604800")
 	headers.Set("x-codex-primary-window-minutes", "10080")
 	headers.Set("x-codex-secondary-used-percent", "0")
@@ -89,6 +89,26 @@ func TestExtractOpenAICodexProbeUpdatesAccepts429WithCodexHeaders(t *testing.T) 
 	}
 	if got := updates["codex_7d_used_percent"]; got != 100.0 {
 		t.Fatalf("codex_7d_used_percent = %v, want 100", got)
+	}
+}
+
+func TestBuildCodexUsageProgressFromExtra_RecomputesRawSnapshotBeforeCanonical(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 30, 7, 4, 9, 0, time.UTC)
+	extra := map[string]any{
+		"codex_primary_used_percent":        100.0,
+		"codex_primary_window_minutes":      10080,
+		"codex_primary_reset_after_seconds": 384607,
+		"codex_7d_used_percent":             100.0,
+		"codex_7d_reset_at":                 now.Add(5 * 24 * time.Hour).Format(time.RFC3339),
+	}
+
+	sevenDay := buildCodexUsageProgressFromExtra(extra, "7d", now)
+	if sevenDay == nil {
+		t.Fatal("expected non-nil 7d progress")
+	}
+	if sevenDay.Utilization != 0 {
+		t.Fatalf("7d Utilization = %v, want 0 from raw remaining=100", sevenDay.Utilization)
 	}
 }
 

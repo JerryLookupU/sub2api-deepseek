@@ -962,6 +962,11 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 // Returns models based on account configurations (model_mapping whitelist)
 // Falls back to default models if no whitelist is configured
 func (h *GatewayHandler) Models(c *gin.Context) {
+	if isCodexModelsCatalogRequest(c) {
+		writeCodexModelsCatalog(c)
+		return
+	}
+
 	apiKey, _ := middleware2.GetAPIKeyFromContext(c)
 
 	var groupID *int64
@@ -1002,6 +1007,11 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 			"object": "list",
 			"data":   geminicli.DefaultModels,
 		})
+		return
+	}
+
+	if platform == service.PlatformKimi {
+		writeModelsList(c, []string{service.KimiDefaultModelID})
 		return
 	}
 
@@ -1130,6 +1140,8 @@ func defaultModelIDsForPlatform(platform string) []string {
 			ids = append(ids, model.ID)
 		}
 		return ids
+	case service.PlatformKimi:
+		return []string{service.KimiDefaultModelID}
 	default:
 		ids := make([]string, 0, len(claude.DefaultModels))
 		for _, model := range claude.DefaultModels {

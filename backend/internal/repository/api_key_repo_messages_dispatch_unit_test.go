@@ -60,7 +60,7 @@ func TestAPIKeyRepository_GetByKeyForAuth_PreservesMessagesDispatchModelConfig_S
 
 	key := &service.APIKey{
 		UserID:  user.ID,
-		Key:     "sk-getbykey-auth-dispatch-unit",
+		Key:     "test-key-getbykey-auth-dispatch-unit",
 		Name:    "Dispatch Key Unit",
 		GroupID: &group.ID,
 		Status:  service.StatusActive,

@@ -32,6 +32,20 @@ type gatewayModelItemForTest struct {
 	CreatedAt string `json:"created_at"`
 }
 
+type codexModelsResponseForTest struct {
+	Models []codexModelItemForTest `json:"models"`
+}
+
+type codexModelItemForTest struct {
+	Slug                     string `json:"slug"`
+	DisplayName              string `json:"display_name"`
+	DefaultReasoningLevel    string `json:"default_reasoning_level"`
+	ShellType                string `json:"shell_type"`
+	Visibility               string `json:"visibility"`
+	SupportedInAPI           bool   `json:"supported_in_api"`
+	SupportsParallelToolCall bool   `json:"supports_parallel_tool_calls"`
+}
+
 func (s *gatewayModelsAccountRepoStub) ListSchedulableByGroupID(ctx context.Context, groupID int64) ([]service.Account, error) {
 	accounts, ok := s.byGroup[groupID]
 	if !ok {
@@ -50,6 +64,34 @@ func newGatewayModelsHandlerForTest(repo service.AccountRepository) *GatewayHand
 			nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
 		),
 	}
+}
+
+func TestGatewayModels_CodexCatalogRequestReturnsDeepSeekModels(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	h := newGatewayModelsHandlerForTest(
+		&gatewayModelsAccountRepoStub{
+			byGroup: map[int64][]service.Account{},
+		},
+	)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models?client_version=0.140.0", nil)
+
+	h.Models(c)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var got codexModelsResponseForTest
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Equal(t, []string{"deepseek-v4-pro", "deepseek-v4-flash"}, codexModelSlugsForTest(got.Models))
+	require.Equal(t, "DeepSeek V4 Pro", got.Models[0].DisplayName)
+	require.Equal(t, "medium", got.Models[0].DefaultReasoningLevel)
+	require.Equal(t, "shell_command", got.Models[0].ShellType)
+	require.Equal(t, "list", got.Models[0].Visibility)
+	require.True(t, got.Models[0].SupportedInAPI)
+	require.True(t, got.Models[0].SupportsParallelToolCall)
 }
 
 func TestGatewayModels_GeminiGroupFallsBackToGeminiModels(t *testing.T) {
@@ -398,4 +440,12 @@ func modelIDsForTest(models []gatewayModelItemForTest) []string {
 		ids = append(ids, model.ID)
 	}
 	return ids
+}
+
+func codexModelSlugsForTest(models []codexModelItemForTest) []string {
+	slugs := make([]string, 0, len(models))
+	for _, model := range models {
+		slugs = append(slugs, model.Slug)
+	}
+	return slugs
 }

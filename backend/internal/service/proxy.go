@@ -7,6 +7,19 @@ import (
 	"time"
 )
 
+// defaultProxyURL 全局默认代理URL，当账号未配置代理时回退使用
+var defaultProxyURL string
+
+// SetDefaultProxyURL 设置全局默认代理URL
+func SetDefaultProxyURL(url string) {
+	defaultProxyURL = url
+}
+
+// GetDefaultProxyURL 获取当前全局默认代理URL
+func GetDefaultProxyURL() string {
+	return defaultProxyURL
+}
+
 type Proxy struct {
 	ID        int64
 	Name      string
@@ -25,6 +38,9 @@ func (p *Proxy) IsActive() bool {
 }
 
 func (p *Proxy) URL() string {
+	if p == nil || p.Protocol == "" {
+		return defaultProxyURL
+	}
 	u := &url.URL{
 		Scheme: p.Protocol,
 		Host:   net.JoinHostPort(p.Host, strconv.Itoa(p.Port)),

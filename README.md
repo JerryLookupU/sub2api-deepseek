@@ -26,9 +26,9 @@ Try Sub2API online: **[https://demo.sub2api.org/](https://demo.sub2api.org/)**
 
 Demo credentials (shared demo environment; **not** created automatically for self-hosted installs):
 
-| Email | Password |
-|-------|----------|
-| admin@sub2api.org | admin123 |
+Set the initial administrator account with `ADMIN_EMAIL` and `ADMIN_PASSWORD`
+during deployment. Do not publish real administrator credentials in the
+repository.
 
 ## Overview
 

@@ -1256,6 +1256,101 @@ func TestResponsesToAnthropicRequest_ToolChoiceLegacyFunctionName(t *testing.T) 
 	assert.Equal(t, "get_weather", tc["name"])
 }
 
+func TestResponsesToAnthropicRequest_InstructionsAndDeveloperRoleBecomeSystem(t *testing.T) {
+	req := &ResponsesRequest{
+		Model:        "deepseek-v4-flash",
+		Instructions: "Use concise answers.",
+		Input: json.RawMessage(`[
+			{"type":"message","role":"developer","content":[{"type":"input_text","text":"Prefer JSON."}]},
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"Hello"}]}
+		]`),
+	}
+
+	resp, err := ResponsesToAnthropicRequest(req)
+	require.NoError(t, err)
+
+	var system string
+	require.NoError(t, json.Unmarshal(resp.System, &system))
+	assert.Equal(t, "Use concise answers.\n\nPrefer JSON.", system)
+	require.Len(t, resp.Messages, 1)
+	assert.Equal(t, "user", resp.Messages[0].Role)
+
+	var blocks []AnthropicContentBlock
+	require.NoError(t, json.Unmarshal(resp.Messages[0].Content, &blocks))
+	require.Len(t, blocks, 1)
+	assert.Equal(t, "text", blocks[0].Type)
+	assert.Equal(t, "Hello", blocks[0].Text)
+	assert.NotContains(t, string(resp.Messages[0].Content), "input_text")
+}
+
+func TestResponsesToAnthropicRequest_DeveloperRoleTrimAndCaseInsensitive(t *testing.T) {
+	req := &ResponsesRequest{
+		Model: "deepseek-v4-flash",
+		Input: json.RawMessage(`[
+			{"role":" Developer ","content":"one"},
+			{"role":"\tDEVELOPER\n","content":"two"},
+			{"role":"user","content":"Hello"}
+		]`),
+	}
+
+	resp, err := ResponsesToAnthropicRequest(req)
+	require.NoError(t, err)
+
+	var system string
+	require.NoError(t, json.Unmarshal(resp.System, &system))
+	assert.Equal(t, "one\n\ntwo", system)
+	require.Len(t, resp.Messages, 1)
+	assert.Equal(t, "user", resp.Messages[0].Role)
+}
+
+func TestResponsesToAnthropicRequest_DropsNamespaceTools(t *testing.T) {
+	req := &ResponsesRequest{
+		Model: "deepseek-v4-flash",
+		Input: json.RawMessage(`[{"role":"user","content":"Hello"}]`),
+		Tools: []ResponsesTool{
+			{
+				Type:        "function",
+				Name:        "exec_command",
+				Description: "Run a command.",
+				Parameters:  json.RawMessage(`{"type":"object","properties":{"cmd":{"type":"string"}},"required":["cmd"]}`),
+			},
+			{
+				Type:        "namespace",
+				Name:        "multi_agent_v1",
+				Description: "Nested tools.",
+			},
+		},
+	}
+
+	resp, err := ResponsesToAnthropicRequest(req)
+	require.NoError(t, err)
+	require.Len(t, resp.Tools, 1)
+	assert.Equal(t, "exec_command", resp.Tools[0].Name)
+	assert.Empty(t, resp.Tools[0].Type)
+}
+
+func TestResponsesToAnthropicRequest_UnknownNamedToolBecomesCustomTool(t *testing.T) {
+	req := &ResponsesRequest{
+		Model: "deepseek-v4-flash",
+		Input: json.RawMessage(`[{"role":"user","content":"Hello"}]`),
+		Tools: []ResponsesTool{
+			{
+				Type:        "local_shell",
+				Name:        "shell",
+				Description: "Run a local command.",
+				Parameters:  json.RawMessage(`{"type":"object","properties":{"cmd":{"type":"string"}},"required":["cmd"]}`),
+			},
+		},
+	}
+
+	resp, err := ResponsesToAnthropicRequest(req)
+	require.NoError(t, err)
+	require.Len(t, resp.Tools, 1)
+	assert.Equal(t, "shell", resp.Tools[0].Name)
+	assert.Empty(t, resp.Tools[0].Type)
+	assert.JSONEq(t, `{"type":"object","properties":{"cmd":{"type":"string"}},"required":["cmd"]}`, string(resp.Tools[0].InputSchema))
+}
+
 // ---------------------------------------------------------------------------
 // Image content block conversion tests
 // ---------------------------------------------------------------------------
@@ -1732,4 +1827,125 @@ func TestAnthropicEventToResponses_CacheTokensFromMessageDelta(t *testing.T) {
 	assert.Equal(t, 8, completed.Response.Usage.OutputTokens)
 	require.NotNil(t, completed.Response.Usage.InputTokensDetails)
 	assert.Equal(t, 11, completed.Response.Usage.InputTokensDetails.CachedTokens)
+}
+
+func TestAnthropicEventToResponses_MessageItemCarriesContentBeforeTextDelta(t *testing.T) {
+	state := NewAnthropicEventToResponsesState()
+
+	AnthropicEventToResponsesEvents(&AnthropicStreamEvent{
+		Type: "message_start",
+		Message: &AnthropicResponse{
+			ID:    "msg_text_stream",
+			Model: "deepseek-v4-flash",
+		},
+	}, state)
+
+	events := AnthropicEventToResponsesEvents(&AnthropicStreamEvent{
+		Type: "content_block_start",
+		ContentBlock: &AnthropicContentBlock{
+			Type: "text",
+			Text: "",
+		},
+	}, state)
+	require.Len(t, events, 2)
+	require.Equal(t, "response.output_item.added", events[0].Type)
+	require.NotNil(t, events[0].Item)
+	require.Len(t, events[0].Item.Content, 1)
+	assert.Equal(t, "output_text", events[0].Item.Content[0].Type)
+	assert.Equal(t, "", events[0].Item.Content[0].Text)
+	require.Equal(t, "response.content_part.added", events[1].Type)
+	require.NotNil(t, events[1].Part)
+	assert.Equal(t, "output_text", events[1].Part.Type)
+	contentPartJSON, err := json.Marshal(events[1])
+	require.NoError(t, err)
+	assert.Contains(t, string(contentPartJSON), `"output_index":0`)
+	assert.Contains(t, string(contentPartJSON), `"content_index":0`)
+
+	events = AnthropicEventToResponsesEvents(&AnthropicStreamEvent{
+		Type: "content_block_delta",
+		Delta: &AnthropicDelta{
+			Type: "text_delta",
+			Text: "OK",
+		},
+	}, state)
+	require.Len(t, events, 1)
+	assert.Equal(t, "response.output_text.delta", events[0].Type)
+	assert.Equal(t, "OK", events[0].Delta)
+	deltaJSON, err := json.Marshal(events[0])
+	require.NoError(t, err)
+	assert.Contains(t, string(deltaJSON), `"content_index":0`)
+
+	events = AnthropicEventToResponsesEvents(&AnthropicStreamEvent{Type: "content_block_stop"}, state)
+	require.Len(t, events, 1)
+	assert.Equal(t, "response.output_text.done", events[0].Type)
+	assert.Equal(t, "OK", events[0].Text)
+
+	events = AnthropicEventToResponsesEvents(&AnthropicStreamEvent{Type: "message_stop"}, state)
+	require.Len(t, events, 2)
+	assert.Equal(t, "response.output_item.done", events[0].Type)
+	require.NotNil(t, events[0].Item)
+	require.Len(t, events[0].Item.Content, 1)
+	assert.Equal(t, "OK", events[0].Item.Content[0].Text)
+	assert.Equal(t, "response.completed", events[1].Type)
+	require.NotNil(t, events[1].Response)
+	require.Len(t, events[1].Response.Output, 1)
+	require.Len(t, events[1].Response.Output[0].Content, 1)
+	assert.Equal(t, "OK", events[1].Response.Output[0].Content[0].Text)
+}
+
+func TestAnthropicEventToResponses_ReasoningOpensSummaryPartBeforeDelta(t *testing.T) {
+	state := NewAnthropicEventToResponsesState()
+
+	AnthropicEventToResponsesEvents(&AnthropicStreamEvent{
+		Type: "message_start",
+		Message: &AnthropicResponse{
+			ID:    "msg_reasoning_stream",
+			Model: "deepseek-v4-flash",
+		},
+	}, state)
+
+	events := AnthropicEventToResponsesEvents(&AnthropicStreamEvent{
+		Type: "content_block_start",
+		ContentBlock: &AnthropicContentBlock{
+			Type: "thinking",
+		},
+	}, state)
+	require.Len(t, events, 2)
+	assert.Equal(t, "response.output_item.added", events[0].Type)
+	require.NotNil(t, events[0].Item)
+	require.Len(t, events[0].Item.Summary, 1)
+	assert.Equal(t, "summary_text", events[0].Item.Summary[0].Type)
+	assert.Equal(t, "response.reasoning_summary_part.added", events[1].Type)
+	require.NotNil(t, events[1].Part)
+	assert.Equal(t, "summary_text", events[1].Part.Type)
+
+	events = AnthropicEventToResponsesEvents(&AnthropicStreamEvent{
+		Type: "content_block_delta",
+		Delta: &AnthropicDelta{
+			Type:     "thinking_delta",
+			Thinking: "Need answer.",
+		},
+	}, state)
+	require.Len(t, events, 1)
+	assert.Equal(t, "response.reasoning_summary_text.delta", events[0].Type)
+	assert.Equal(t, "Need answer.", events[0].Delta)
+
+	events = AnthropicEventToResponsesEvents(&AnthropicStreamEvent{Type: "content_block_stop"}, state)
+	require.Len(t, events, 3)
+	assert.Equal(t, "response.reasoning_summary_text.done", events[0].Type)
+	assert.Equal(t, "response.reasoning_summary_part.done", events[1].Type)
+	require.NotNil(t, events[1].Part)
+	assert.Equal(t, "Need answer.", events[1].Part.Text)
+	assert.Equal(t, "response.output_item.done", events[2].Type)
+	require.NotNil(t, events[2].Item)
+	require.Len(t, events[2].Item.Summary, 1)
+	assert.Equal(t, "Need answer.", events[2].Item.Summary[0].Text)
+
+	events = AnthropicEventToResponsesEvents(&AnthropicStreamEvent{Type: "message_stop"}, state)
+	require.Len(t, events, 1)
+	assert.Equal(t, "response.completed", events[0].Type)
+	require.NotNil(t, events[0].Response)
+	require.Len(t, events[0].Response.Output, 1)
+	require.Len(t, events[0].Response.Output[0].Summary, 1)
+	assert.Equal(t, "Need answer.", events[0].Response.Output[0].Summary[0].Text)
 }

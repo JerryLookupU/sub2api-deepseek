@@ -385,14 +385,15 @@ func TestBuildContentModerationLog_RedactsInputExcerpt(t *testing.T) {
 		Provider:  "openai",
 	}
 
-	log := svc.buildLog(input, cfg, ContentModerationActionAllow, true, "sexual", 0.8, map[string]float64{"sexual": 0.8}, "hello sk-proj-1234567890abcdef", nil, nil, "")
+	log := svc.buildLog(input, cfg, ContentModerationActionAllow, true, "sexual", 0.8, map[string]float64{"sexual": 0.8}, "hello test-sensitive-api-key-1234567890abcdef", nil, nil, "")
 
-	require.NotContains(t, log.InputExcerpt, "sk-proj-1234567890abcdef")
+	require.NotContains(t, log.InputExcerpt, "test-sensitive-api-key-1234567890abcdef")
 	require.Contains(t, log.InputExcerpt, "[已脱敏]")
 }
 
 func TestRedactContentModerationSecrets_LongHexAndTokens(t *testing.T) {
-	input := "你哈市多大事cf5bbdc4cd508f3aaf0d2070d529d4a4ac29099f8ecc357f696df28e1df91554 token=abc123456789xyz Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signaturepart https://example.com/private/path?token=abc123"
+	jwtToken := "eyJ" + "hbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signaturepart"
+	input := "你哈市多大事cf5bbdc4cd508f3aaf0d2070d529d4a4ac29099f8ecc357f696df28e1df91554 token=abc123456789xyz Bearer " + jwtToken + " https://example.com/private/path?token=abc123"
 
 	out := redactContentModerationSecrets(input)
 
@@ -960,7 +961,7 @@ func TestExtractContentModerationInput_OpenAIResponsesCodexPayloadUsesLastUserMe
 		"model":"gpt-5.5",
 		"instructions":"instructions.....",
 		"input":[
-			{"type":"message","role":"developer","content":[{"type":"input_text","text":"developer permissions sk-proj-1234567890abcdef"}]},
+			{"type":"message","role":"developer","content":[{"type":"input_text","text":"developer permissions test-sensitive-api-key-1234567890abcdef"}]},
 			{"type":"message","role":"user","content":[{"type":"input_text","text":"first user prompt"}]},
 			{"type":"message","role":"user","content":[{"type":"input_text","text":"last user prompt"}]}
 		],

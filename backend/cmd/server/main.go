@@ -20,6 +20,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/handler"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/Wei-Shaw/sub2api/internal/setup"
 	"github.com/Wei-Shaw/sub2api/internal/web"
 
@@ -146,6 +147,12 @@ func runMainServer() {
 	buildInfo := handler.BuildInfo{
 		Version:   Version,
 		BuildType: BuildType,
+	}
+
+	// 注入全局默认代理URL
+	if cfg.Gateway.DefaultProxyURL != "" {
+		service.SetDefaultProxyURL(cfg.Gateway.DefaultProxyURL)
+		log.Printf("Default proxy enabled: %s", cfg.Gateway.DefaultProxyURL)
 	}
 
 	app, err := initializeApplication(buildInfo)

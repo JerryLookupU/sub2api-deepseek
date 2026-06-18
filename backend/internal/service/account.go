@@ -64,16 +64,35 @@ type Account struct {
 	modelMappingCacheRawPtr         uintptr
 	modelMappingCacheRawLen         int
 	modelMappingCacheRawSig         uint64
+
+	// discovered_models 热路径缓存（非持久化字段）
+	discoveredModelsCache         map[string]struct{}
+	discoveredModelsCacheReady    bool
+	discoveredModelsCacheExtraPtr uintptr
+	discoveredModelsCacheRawPtr   uintptr
+	discoveredModelsCacheRawLen   int
+	discoveredModelsCacheRawSig   uint64
 }
 
 type OpenAIEndpointCapability string
 
 const (
 	OpenAIEndpointCapabilityChatCompletions OpenAIEndpointCapability = "chat_completions"
+	OpenAIEndpointCapabilityResponses       OpenAIEndpointCapability = "responses"
 	OpenAIEndpointCapabilityEmbeddings      OpenAIEndpointCapability = "embeddings"
 )
 
 const openAIEndpointCapabilitiesCredentialKey = "openai_capabilities"
+
+const (
+	OpenAIUpstreamProtocolAnthropicResponses = "anthropic_responses"
+	openAIUpstreamProtocolExtraKey           = "openai_upstream_protocol"
+)
+
+const (
+	KimiDefaultBaseURL = "https://api.kimi.com/coding/"
+	KimiDefaultModelID = "kimi-for-coding"
+)
 
 type TempUnschedulableRule struct {
 	ErrorCode       int      `json:"error_code"`
@@ -617,18 +636,34 @@ func resolveRequestedModelInMapping(mapping map[string]string, requestedModel st
 	return matchWildcardMappingResult(mapping, requestedModel)
 }
 
-// IsModelSupported 检查模型是否在 model_mapping 中（支持通配符）
-// 如果未配置 mapping，返回 true（允许所有模型）
+// IsModelSupported 报告账号能否服务 requestedModel。优先级（先命中先返回）：
+//  1. 显式 model_mapping（支持通配符）——配置了就以它为准。
+//  2. 发现的上游模型——未配置 mapping 但已跑过上游发现时，账号只支持该集合。
+//     这修复了历史上“空 mapping = 支持全部”导致可探测账号抢走任意模型请求的坑。
+//  3. 兜底允许全部——既无 mapping 又无发现集合（如无法探测的 OpenAI OAuth 账号）。
 func (a *Account) IsModelSupported(requestedModel string) bool {
-	mapping := a.GetModelMapping()
-	if len(mapping) == 0 {
-		return true // 无映射 = 允许所有
+	if mapping := a.GetModelMapping(); len(mapping) > 0 {
+		if mappingSupportsRequestedModel(mapping, requestedModel) {
+			return true
+		}
+		normalized := normalizeRequestedModelForLookup(a.Platform, requestedModel)
+		return normalized != requestedModel && mappingSupportsRequestedModel(mapping, normalized)
 	}
-	if mappingSupportsRequestedModel(mapping, requestedModel) {
-		return true
+
+	if discovered := a.GetDiscoveredModels(); len(discovered) > 0 {
+		if _, ok := discovered[requestedModel]; ok {
+			return true
+		}
+		normalized := normalizeRequestedModelForLookup(a.Platform, requestedModel)
+		if normalized != requestedModel {
+			if _, ok := discovered[normalized]; ok {
+				return true
+			}
+		}
+		return false
 	}
-	normalized := normalizeRequestedModelForLookup(a.Platform, requestedModel)
-	return normalized != requestedModel && mappingSupportsRequestedModel(mapping, normalized)
+
+	return true // 无映射且无发现集合 = 允许所有（兼容旧行为）
 }
 
 // GetMappedModel 获取映射后的模型名（支持通配符，最长优先匹配）
@@ -734,6 +769,9 @@ func (a *Account) GetBaseURL() string {
 	}
 	baseURL := a.GetCredential("base_url")
 	if baseURL == "" {
+		if a.Platform == PlatformKimi {
+			return KimiDefaultBaseURL
+		}
 		return "https://api.anthropic.com"
 	}
 	if a.Platform == PlatformAntigravity {
@@ -1054,12 +1092,31 @@ func (a *Account) IsAnthropic() bool {
 	return a.Platform == PlatformAnthropic
 }
 
+func (a *Account) IsKimi() bool {
+	return a.Platform == PlatformKimi
+}
+
+func (a *Account) IsAnthropicCompatibleAPIKey() bool {
+	return (a.Platform == PlatformAnthropic || a.Platform == PlatformKimi) && a.Type == AccountTypeAPIKey
+}
+
 func (a *Account) IsOpenAIOAuth() bool {
 	return a.IsOpenAI() && a.Type == AccountTypeOAuth
 }
 
 func (a *Account) IsOpenAIApiKey() bool {
 	return a.IsOpenAI() && a.Type == AccountTypeAPIKey
+}
+
+func (a *Account) GetOpenAIUpstreamProtocol() string {
+	if !a.IsOpenAIApiKey() {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(a.GetExtraString(openAIUpstreamProtocolExtraKey)))
+}
+
+func (a *Account) IsOpenAIAnthropicResponsesAPIKey() bool {
+	return a.GetOpenAIUpstreamProtocol() == OpenAIUpstreamProtocolAnthropicResponses
 }
 
 func (a *Account) GetOpenAIBaseURL() string {
@@ -1143,6 +1200,7 @@ func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapa
 	}
 	switch capability {
 	case OpenAIEndpointCapabilityChatCompletions:
+	case OpenAIEndpointCapabilityResponses:
 	case OpenAIEndpointCapabilityEmbeddings:
 		if a.Type != AccountTypeAPIKey {
 			return false
@@ -1153,6 +1211,9 @@ func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapa
 
 	configured, found := a.openAIEndpointCapabilitySet()
 	if !found {
+		return true
+	}
+	if capability == OpenAIEndpointCapabilityResponses && configured[string(OpenAIEndpointCapabilityChatCompletions)] {
 		return true
 	}
 	return configured[string(capability)]

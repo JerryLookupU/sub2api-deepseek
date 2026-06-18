@@ -398,6 +398,8 @@ const currentFiles = computed((): FileConfig[] => {
     switch (props.platform) {
       case 'anthropic':
         return [generateOpenCodeConfig('anthropic', apiBase, apiKey)]
+      case 'kimi':
+        return [generateOpenCodeConfig('kimi', apiBase, apiKey)]
       case 'openai':
         return [generateOpenCodeConfig('openai', apiBase, apiKey)]
       case 'gemini':
@@ -423,6 +425,8 @@ const currentFiles = computed((): FileConfig[] => {
       return generateOpenAIFiles(baseUrl, apiKey)
     case 'gemini':
       return [generateGeminiCliContent(baseUrl, apiKey)]
+    case 'kimi':
+      return generateAnthropicFiles(baseUrl, apiKey)
     case 'antigravity':
       if (activeClientTab.value === 'gemini') {
         return [generateGeminiCliContent(`${baseUrl}/antigravity`, apiKey)]
@@ -436,25 +440,32 @@ const currentFiles = computed((): FileConfig[] => {
 function generateAnthropicFiles(baseUrl: string, apiKey: string): FileConfig[] {
   let path: string
   let content: string
+  const onboardingCommand = `node --eval "const fs=require('fs');const os=require('os');const path=require('path');const filePath=path.join(os.homedir(),'.claude.json');const content=fs.existsSync(filePath)?JSON.parse(fs.readFileSync(filePath,'utf-8')):{};fs.writeFileSync(filePath,JSON.stringify({...content,hasCompletedOnboarding:true},null,2),'utf-8');"`
 
   switch (activeTab.value) {
     case 'unix':
       path = 'Terminal'
       content = `export ANTHROPIC_BASE_URL="${baseUrl}"
 export ANTHROPIC_AUTH_TOKEN="${apiKey}"
-export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
+export ANTHROPIC_API_KEY="${apiKey}"
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+${onboardingCommand}`
       break
     case 'cmd':
       path = 'Command Prompt'
       content = `set ANTHROPIC_BASE_URL=${baseUrl}
 set ANTHROPIC_AUTH_TOKEN=${apiKey}
-set CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
+set ANTHROPIC_API_KEY=${apiKey}
+set CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+${onboardingCommand}`
       break
     case 'powershell':
       path = 'PowerShell'
       content = `$env:ANTHROPIC_BASE_URL="${baseUrl}"
 $env:ANTHROPIC_AUTH_TOKEN="${apiKey}"
-$env:CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
+$env:ANTHROPIC_API_KEY="${apiKey}"
+$env:CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+${onboardingCommand}`
       break
     default:
       path = 'Terminal'
@@ -469,6 +480,7 @@ $env:CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
   "env": {
     "ANTHROPIC_BASE_URL": "${baseUrl}",
     "ANTHROPIC_AUTH_TOKEN": "${apiKey}",
+    "ANTHROPIC_API_KEY": "${apiKey}",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     "CLAUDE_CODE_ATTRIBUTION_HEADER": "0"
   }
@@ -1001,12 +1013,25 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
       }
     }
   }
+  const kimiModels = {
+    'kimi-for-coding': {
+      name: 'Kimi for Coding',
+      limit: {
+        context: 200000,
+        output: 64000
+      }
+    }
+  }
 
   if (platform === 'gemini') {
     provider[platform].npm = '@ai-sdk/google'
     provider[platform].models = geminiModels
   } else if (platform === 'anthropic') {
     provider[platform].npm = '@ai-sdk/anthropic'
+  } else if (platform === 'kimi') {
+    provider[platform].npm = '@ai-sdk/anthropic'
+    provider[platform].name = 'Kimi'
+    provider[platform].models = kimiModels
   } else if (platform === 'antigravity-claude') {
     provider[platform].npm = '@ai-sdk/anthropic'
     provider[platform].name = 'Antigravity (Claude)'

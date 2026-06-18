@@ -67,7 +67,7 @@ func TestParseVertexServiceAccountKey(t *testing.T) {
 		"type": "service_account",
 		"project_id": "vertex-proj",
 		"private_key_id": "kid",
-		"private_key": "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n",
+		"private_key": "-----BEGIN TEST PRIVATE KEY-----\nabc\n-----END TEST PRIVATE KEY-----\n",
 		"client_email": "svc@vertex-proj.iam.gserviceaccount.com"
 	}`
 	account := &Account{
@@ -82,7 +82,7 @@ func TestParseVertexServiceAccountKey(t *testing.T) {
 	require.Equal(t, "vertex-proj", key.ProjectID)
 	require.Equal(t, "svc@vertex-proj.iam.gserviceaccount.com", key.ClientEmail)
 	require.Equal(t, vertexDefaultTokenURL, key.TokenURI)
-	require.True(t, strings.Contains(key.PrivateKey, "BEGIN PRIVATE KEY"))
+	require.True(t, strings.Contains(key.PrivateKey, "BEGIN TEST PRIVATE KEY"))
 }
 
 func TestVertexServiceAccountProxyURL(t *testing.T) {

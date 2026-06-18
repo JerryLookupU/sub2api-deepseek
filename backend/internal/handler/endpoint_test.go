@@ -69,6 +69,9 @@ func TestDeriveUpstreamEndpoint(t *testing.T) {
 		// Anthropic.
 		{"anthropic messages", EndpointMessages, "/v1/messages", service.PlatformAnthropic, EndpointMessages},
 
+		// Kimi — Anthropic-compatible messages API.
+		{"kimi messages", EndpointMessages, "/v1/messages", service.PlatformKimi, EndpointMessages},
+
 		// Gemini.
 		{"gemini models", EndpointGeminiModels, "/v1beta/models/gemini:gen", service.PlatformGemini, EndpointGeminiModels},
 

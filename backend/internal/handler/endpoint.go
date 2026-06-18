@@ -68,7 +68,7 @@ func NormalizeInboundEndpoint(path string) string {
 // Platform-specific rules:
 //   - OpenAI always forwards to /v1/responses (with optional subpath
 //     such as /v1/responses/compact preserved from the raw URL).
-//   - Anthropic  → /v1/messages
+//   - Anthropic/Kimi → /v1/messages
 //   - Gemini     → /v1beta/models
 //   - Antigravity → /v1/messages (Claude) or gemini (Gemini)
 //   - Antigravity routes may target either Claude or Gemini, so the
@@ -88,7 +88,7 @@ func DeriveUpstreamEndpoint(inbound, rawRequestPath, platform string) string {
 		}
 		return EndpointResponses
 
-	case service.PlatformAnthropic:
+	case service.PlatformAnthropic, service.PlatformKimi:
 		return EndpointMessages
 
 	case service.PlatformGemini:

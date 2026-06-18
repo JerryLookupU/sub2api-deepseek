@@ -1048,7 +1048,27 @@ func calculateOpenAI429ResetTime(headers http.Header) *time.Time {
 		return &resetAt
 	}
 
-	// 都未达到100%但收到429，使用较长的重置时间
+	// 都未达到100%但收到429，优先使用当前利用率最高的窗口；这避免把
+	// remaining=100% 的长窗口误选成长时间暂停。
+	var fallbackResetSecs int
+	var fallbackUtilization float64 = -1
+	if normalized.Used7dPercent != nil && normalized.Reset7dSeconds != nil {
+		fallbackUtilization = *normalized.Used7dPercent
+		fallbackResetSecs = *normalized.Reset7dSeconds
+	}
+	if normalized.Used5hPercent != nil && normalized.Reset5hSeconds != nil {
+		if *normalized.Used5hPercent > fallbackUtilization {
+			fallbackUtilization = *normalized.Used5hPercent
+			fallbackResetSecs = *normalized.Reset5hSeconds
+		}
+	}
+	if fallbackResetSecs > 0 {
+		resetAt := now.Add(time.Duration(fallbackResetSecs) * time.Second)
+		slog.Info("openai_429_using_highest_utilization_reset", "utilization_percent", fallbackUtilization, "reset_after_seconds", fallbackResetSecs, "reset_at", resetAt)
+		return &resetAt
+	}
+
+	// If utilization was absent but reset values exist, keep the old conservative fallback.
 	var maxResetSecs int
 	if normalized.Reset7dSeconds != nil && *normalized.Reset7dSeconds > maxResetSecs {
 		maxResetSecs = *normalized.Reset7dSeconds

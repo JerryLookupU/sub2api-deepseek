@@ -97,6 +97,7 @@ export default {
       claude: 'Claude',
       gemini: 'Gemini',
       antigravity: 'Antigravity',
+      kimi: 'Kimi',
       more: '更多'
     },
     // CTA 区块
@@ -114,7 +115,7 @@ export default {
   keyUsage: {
     title: 'API Key 用量查询',
     subtitle: '输入您的 API Key 以查看实时消费金额与使用状态',
-    placeholder: 'sk-ant-mirror-xxxxxxxxxxxx',
+    placeholder: 'sk-example',
     query: '查询',
     querying: '查询中...',
     privacyNote: '您的 Key 仅在浏览器本地处理，不会被存储',
@@ -2177,6 +2178,7 @@ export default {
         openai: 'OpenAI',
         gemini: 'Gemini',
         antigravity: 'Antigravity',
+        kimi: 'Kimi',
       },
       saving: '保存中...',
       noGroups: '暂无分组',
@@ -3238,11 +3240,13 @@ export default {
         anthropic: 'Anthropic',
         gemini: 'Gemini',
         antigravity: 'Antigravity',
+        kimi: 'Kimi',
       },
       types: {
         oauth: 'OAuth',
         chatgptOauth: 'ChatGPT OAuth',
         responsesApi: 'Responses API',
+        anthropicResponses: 'Responses 转 Anthropic',
         googleOauth: 'Google OAuth',
         codeAssist: 'Code Assist',
         antigravityOauth: 'Antigravity OAuth',
@@ -3480,6 +3484,8 @@ export default {
           '默认关闭。开启后可启用 responses_websockets_v2 协议能力（受网关全局开关与账号类型开关约束）。',
         wsMode: 'WS mode',
         wsModeDesc: '仅对当前 OpenAI 账号类型生效。',
+        upstreamProtocol: '上游协议',
+        upstreamProtocolDesc: 'Response API = 直接走 OpenAI Responses；Responses 转 Anthropic = 把 Responses 请求转成 Anthropic /v1/messages 打上游。',
         wsModeOff: '关闭（off）',
         wsModeCtxPool: '上下文池（ctx_pool）',
         wsModePassthrough: '透传（passthrough）',

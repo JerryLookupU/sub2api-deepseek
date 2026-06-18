@@ -119,8 +119,10 @@ func openAIRequestBodyImageGenerationToolNeedsNormalization(body []byte) bool {
 		if openAIJSONString(item.Get("type")) != "image_generation" {
 			return true
 		}
-		// 只有旧字段需要迁移时才进入 map 修改，纯计费读取保持 raw 路径。
-		if item.Get("format").Exists() || item.Get("compression").Exists() {
+		// 旧字段迁移或缺省图片模型补齐时才进入 map 修改，纯计费读取保持 raw 路径。
+		if item.Get("format").Exists() ||
+			item.Get("compression").Exists() ||
+			strings.TrimSpace(openAIJSONString(item.Get("model"))) == "" {
 			needsNormalization = true
 			return false
 		}

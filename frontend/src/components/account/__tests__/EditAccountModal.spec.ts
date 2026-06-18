@@ -149,7 +149,7 @@ function buildVertexAccount() {
     platform: 'gemini',
     type: 'service_account',
     credentials: {
-      service_account_json: '{"type":"service_account","client_email":"sa@example.iam.gserviceaccount.com","private_key":"-----BEGIN PRIVATE KEY-----\\nMIIE\\n-----END PRIVATE KEY-----\\n"}',
+      service_account_json: '{"type":"service_account","client_email":"sa@example.iam.gserviceaccount.com","private_key":"-----BEGIN TEST PRIVATE KEY-----\\nMIIE\\n-----END TEST PRIVATE KEY-----\\n"}',
       project_id: 'demo-project',
       client_email: 'sa@example.iam.gserviceaccount.com',
       location: 'us-central1',

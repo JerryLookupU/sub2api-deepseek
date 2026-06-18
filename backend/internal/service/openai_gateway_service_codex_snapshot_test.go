@@ -104,8 +104,8 @@ func TestBuildCodexUsageExtraUpdates_UsesSnapshotUpdatedAt(t *testing.T) {
 	}
 }
 
-func TestBuildCodexUsageExtraUpdates_NormalizesFiveHourRemainingToUsedPercent(t *testing.T) {
-	primaryUsed := 93.0
+func TestBuildCodexUsageExtraUpdates_NormalizesRemainingToUsedPercent(t *testing.T) {
+	primaryRemaining := 93.0
 	primaryReset := 86400
 	primaryWindow := 10080
 	secondaryRemaining := 6.0
@@ -113,7 +113,7 @@ func TestBuildCodexUsageExtraUpdates_NormalizesFiveHourRemainingToUsedPercent(t 
 	secondaryWindow := 300
 
 	snapshot := &OpenAICodexUsageSnapshot{
-		PrimaryUsedPercent:         &primaryUsed,
+		PrimaryUsedPercent:         &primaryRemaining,
 		PrimaryResetAfterSeconds:   &primaryReset,
 		PrimaryWindowMinutes:       &primaryWindow,
 		SecondaryUsedPercent:       &secondaryRemaining,
@@ -133,8 +133,8 @@ func TestBuildCodexUsageExtraUpdates_NormalizesFiveHourRemainingToUsedPercent(t 
 	if got := updates["codex_5h_used_percent"]; got != 94.0 {
 		t.Fatalf("codex_5h_used_percent = %v, want 94", got)
 	}
-	if got := updates["codex_7d_used_percent"]; got != 93.0 {
-		t.Fatalf("codex_7d_used_percent = %v, want 93", got)
+	if got := updates["codex_7d_used_percent"]; got != 7.0 {
+		t.Fatalf("codex_7d_used_percent = %v, want 7", got)
 	}
 }
 

@@ -109,7 +109,7 @@ func (s *APIKeyRepoSuite) TestGetByKeyForAuth_PreservesMessagesDispatchModelConf
 
 	key := &service.APIKey{
 		UserID:  user.ID,
-		Key:     "sk-getbykey-auth-dispatch",
+		Key:     "test-key-getbykey-auth-dispatch",
 		Name:    "Dispatch Key",
 		GroupID: &group.ID,
 		Status:  service.StatusActive,
@@ -192,7 +192,7 @@ func (s *APIKeyRepoSuite) TestDelete() {
 
 func (s *APIKeyRepoSuite) TestCreate_AfterSoftDelete_AllowsSameKey() {
 	user := s.mustCreateUser("recreate-after-soft-delete@test.com")
-	const reusedKey = "sk-reuse-after-soft-delete"
+	const reusedKey = "test-key-reuse-after-soft-delete"
 
 	first := &service.APIKey{
 		UserID: user.ID,

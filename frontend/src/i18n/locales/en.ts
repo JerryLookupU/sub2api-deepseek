@@ -97,6 +97,7 @@ export default {
       claude: 'Claude',
       gemini: 'Gemini',
       antigravity: 'Antigravity',
+      kimi: 'Kimi',
       more: 'More'
     },
     // CTA section
@@ -114,7 +115,7 @@ export default {
   keyUsage: {
     title: 'API Key Usage',
     subtitle: 'Enter your API Key to view real-time spending and usage status',
-    placeholder: 'sk-ant-mirror-xxxxxxxxxxxx',
+    placeholder: 'sk-example',
     query: 'Query',
     querying: 'Querying...',
     privacyNote: 'Your Key is processed locally in the browser and will not be stored',
@@ -2149,6 +2150,7 @@ export default {
         openai: 'OpenAI',
         gemini: 'Gemini',
         antigravity: 'Antigravity',
+        kimi: 'Kimi',
       },
       deleteConfirm:
         "Are you sure you want to delete '{name}'? All associated API keys will no longer belong to any group.",
@@ -3051,11 +3053,13 @@ export default {
         openai: 'OpenAI',
         gemini: 'Gemini',
         antigravity: 'Antigravity',
+        kimi: 'Kimi',
       },
       types: {
         oauth: 'OAuth',
         chatgptOauth: 'ChatGPT OAuth',
         responsesApi: 'Responses API',
+        anthropicResponses: 'Responses → Anthropic',
         googleOauth: 'Google OAuth',
         codeAssist: 'Code Assist',
         antigravityOauth: 'Antigravity OAuth',
@@ -3332,6 +3336,8 @@ export default {
           'Disabled by default. Enable to allow responses_websockets_v2 capability (still gated by global and account-type switches).',
         wsMode: 'WS mode',
         wsModeDesc: 'Only applies to the current OpenAI account type.',
+        upstreamProtocol: 'Upstream Protocol',
+        upstreamProtocolDesc: 'Response API = native OpenAI Responses; Responses → Anthropic = translate Responses requests to Anthropic /v1/messages upstream.',
         wsModeOff: 'Off (off)',
         wsModeCtxPool: 'Context Pool (ctx_pool)',
         wsModePassthrough: 'Passthrough (passthrough)',

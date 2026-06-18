@@ -702,6 +702,9 @@ type GatewayConfig struct {
 	GeminiDebugResponseHeaders bool `mapstructure:"gemini_debug_response_headers"`
 	// ConnectionPoolIsolation: 上游连接池隔离策略（proxy/account/account_proxy）
 	ConnectionPoolIsolation string `mapstructure:"connection_pool_isolation"`
+	// DefaultProxyURL: 默认代理URL，当账号未配置代理时使用。
+	// 支持 http/https/socks5/socks5h 协议，例如 "http://127.0.0.1:7890"
+	DefaultProxyURL string `mapstructure:"default_proxy_url"`
 	// ForceCodexCLI: 强制将 OpenAI `/v1/responses` 请求按 Codex CLI 处理。
 	// 用于网关未透传/改写 User-Agent 时的兼容兜底（默认关闭，避免影响其他客户端）。
 	ForceCodexCLI bool `mapstructure:"force_codex_cli"`
@@ -1925,6 +1928,8 @@ func setDefaults() {
 	viper.SetDefault("gateway.user_message_queue.cleanup_interval_seconds", 60)
 
 	viper.SetDefault("gateway.tls_fingerprint.enabled", true)
+	// 默认代理URL（当账号未配置代理时回退使用）
+	viper.SetDefault("gateway.default_proxy_url", "")
 	viper.SetDefault("concurrency.ping_interval", 10)
 
 	// TokenRefresh
