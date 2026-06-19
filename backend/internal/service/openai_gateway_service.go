@@ -2490,7 +2490,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	if passthroughEnabled {
 		// 透传分支只需要轻量提取字段，避免热路径全量 Unmarshal。
 		reasoningEffort := extractOpenAIReasoningEffortFromBody(body, reqModel)
-		return s.forwardOpenAIPassthrough(ctx, c, account, originalBody, reqModel, reasoningEffort, reqStream, startTime)
+		return s.forwardOpenAIPassthrough(ctx, c, account, originalBody, reqModel, reasoningEffort, reqStream, startTime, isCodexCLI)
 	}
 
 	bodyModified := false
@@ -2774,6 +2774,23 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			requestView = newOpenAIRequestView(body)
 		}
 	}
+
+	if !isOpenAIResponsesCompactRequest(c, body) {
+		decoded, decodeErr := ensureReqBody()
+		if decodeErr != nil {
+			return nil, decodeErr
+		}
+		if normalizePlaintextEncryptedContentInOpenAIRequestBodyMap(decoded) {
+			var marshalErr error
+			body, marshalErr = marshalOpenAIUpstreamJSON(decoded)
+			if marshalErr != nil {
+				return nil, fmt.Errorf("serialize request body after plaintext encrypted_content normalization: %w", marshalErr)
+			}
+			requestView = newOpenAIRequestView(body)
+			reqBody = decoded
+		}
+	}
+
 	imageBillingModel := ""
 	imageSizeTier := ""
 	imageInputSize := ""
@@ -3184,6 +3201,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	reasoningEffort *string,
 	reqStream bool,
 	startTime time.Time,
+	isCodexCLI bool,
 ) (*OpenAIForwardResult, error) {
 	upstreamPassthroughModel := ""
 	if isOpenAIResponsesCompactPath(c) {
@@ -3199,6 +3217,14 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	}
 
 	if account != nil && account.Type == AccountTypeOAuth {
+		normalizedBody, normalized, err := ensureOpenAIPassthroughInstructions(body)
+		if err != nil {
+			return nil, err
+		}
+		if normalized {
+			body = normalizedBody
+		}
+
 		if rejectReason := detectOpenAIPassthroughInstructionsRejectReason(reqModel, body); rejectReason != "" {
 			rejectMsg := "OpenAI codex passthrough requires a non-empty instructions field"
 			MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalPolicyDenied)
@@ -3212,7 +3238,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			return nil, fmt.Errorf("openai passthrough rejected before upstream: %s", rejectReason)
 		}
 
-		normalizedBody, normalized, err := normalizeOpenAIPassthroughOAuthBody(body, isOpenAIResponsesCompactPath(c))
+		normalizedBody, normalized, err = normalizeOpenAIPassthroughOAuthBody(body, isOpenAIResponsesCompactPath(c))
 		if err != nil {
 			return nil, err
 		}
@@ -3228,6 +3254,16 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	}
 	if sanitized {
 		body = sanitizedBody
+	}
+
+	if !isOpenAIResponsesCompactRequest(c, body) {
+		normalizedBody, normalized, err := normalizePlaintextEncryptedContentInOpenAIBody(body)
+		if err != nil {
+			return nil, err
+		}
+		if normalized {
+			body = normalizedBody
+		}
 	}
 
 	// Apply OpenAI fast policy to the passthrough body (filter/block by service_tier).
@@ -5561,8 +5597,157 @@ func sanitizeEncryptedReasoningInputItem(item any) (next any, changed bool, keep
 	return inputItem, true, true
 }
 
+func normalizePlaintextEncryptedContentInOpenAIBody(body []byte) ([]byte, bool, error) {
+	if len(bytes.TrimSpace(body)) == 0 {
+		return body, false, nil
+	}
+
+	var reqBody map[string]any
+	if err := json.Unmarshal(body, &reqBody); err != nil {
+		return body, false, fmt.Errorf("parse OpenAI request body for plaintext encrypted_content normalization: %w", err)
+	}
+	if !normalizePlaintextEncryptedContentInOpenAIRequestBodyMap(reqBody) {
+		return body, false, nil
+	}
+
+	normalized, err := marshalOpenAIUpstreamJSON(reqBody)
+	if err != nil {
+		return body, false, fmt.Errorf("serialize OpenAI request body after plaintext encrypted_content normalization: %w", err)
+	}
+	return normalized, true, nil
+}
+
+func normalizePlaintextEncryptedContentInOpenAIRequestBodyMap(reqBody map[string]any) bool {
+	if len(reqBody) == 0 {
+		return false
+	}
+
+	changed := false
+	inputValue, has := reqBody["input"]
+	if has {
+		switch input := inputValue.(type) {
+		case []any:
+			for i, item := range input {
+				nextItem, itemChanged := normalizePlaintextEncryptedContentInputItem(item)
+				if itemChanged {
+					input[i] = nextItem
+					changed = true
+				}
+			}
+			if changed {
+				reqBody["input"] = input
+			}
+		case []map[string]any:
+			for i, item := range input {
+				nextItem, itemChanged := normalizePlaintextEncryptedContentInputItem(item)
+				if !itemChanged {
+					continue
+				}
+				nextMap, ok := nextItem.(map[string]any)
+				if !ok {
+					continue
+				}
+				input[i] = nextMap
+				changed = true
+			}
+			if changed {
+				reqBody["input"] = input
+			}
+		case map[string]any:
+			nextItem, itemChanged := normalizePlaintextEncryptedContentInputItem(input)
+			if itemChanged {
+				reqBody["input"] = nextItem
+				changed = true
+			}
+		}
+	}
+
+	if stripPlaintextEncryptedContentRecursive(reqBody) {
+		changed = true
+	}
+	return changed
+}
+
+func normalizePlaintextEncryptedContentInputItem(item any) (next any, changed bool) {
+	inputItem, ok := item.(map[string]any)
+	if !ok {
+		return item, false
+	}
+
+	encryptedContent, _ := inputItem["encrypted_content"].(string)
+	encryptedContent = strings.TrimSpace(encryptedContent)
+	if encryptedContent == "" || isLikelyOpenAIEncryptedContent(encryptedContent) {
+		return item, false
+	}
+
+	return plaintextEncryptedContentSummaryMessage(encryptedContent), true
+}
+
+func plaintextEncryptedContentSummaryMessage(summary string) map[string]any {
+	return map[string]any{
+		"type": "message",
+		"role": "user",
+		"content": []any{
+			map[string]any{
+				"type": "input_text",
+				"text": "Previous compacted conversation summary:\n\n" + summary,
+			},
+		},
+	}
+}
+
+func isLikelyOpenAIEncryptedContent(value string) bool {
+	value = strings.TrimSpace(value)
+	return strings.HasPrefix(value, "gAAA")
+}
+
+func stripPlaintextEncryptedContentRecursive(value any) bool {
+	switch typed := value.(type) {
+	case map[string]any:
+		changed := false
+		for key, nested := range typed {
+			if key == "encrypted_content" {
+				encryptedContent, ok := nested.(string)
+				if ok && strings.TrimSpace(encryptedContent) != "" && !isLikelyOpenAIEncryptedContent(encryptedContent) {
+					delete(typed, key)
+					changed = true
+				}
+				continue
+			}
+			if stripPlaintextEncryptedContentRecursive(nested) {
+				changed = true
+			}
+		}
+		return changed
+	case []any:
+		changed := false
+		for _, nested := range typed {
+			if stripPlaintextEncryptedContentRecursive(nested) {
+				changed = true
+			}
+		}
+		return changed
+	case []map[string]any:
+		changed := false
+		for _, nested := range typed {
+			if stripPlaintextEncryptedContentRecursive(nested) {
+				changed = true
+			}
+		}
+		return changed
+	default:
+		return false
+	}
+}
+
 func IsOpenAIResponsesCompactPathForTest(c *gin.Context) bool {
 	return isOpenAIResponsesCompactPath(c)
+}
+
+// IsOpenAIResponsesCompactRequest reports whether a Responses request is a
+// remote compaction request, including Codex's /v1/responses compaction trigger.
+func IsOpenAIResponsesCompactRequest(c *gin.Context, body []byte) bool {
+	return isOpenAIResponsesCompactRequest(c, body)
 }
 
 func OpenAICompactSessionSeedKeyForTest() string {
@@ -5578,14 +5763,23 @@ func isOpenAIResponsesCompactPath(c *gin.Context) bool {
 	return suffix == "/compact" || strings.HasPrefix(suffix, "/compact/")
 }
 
+func isOpenAIResponsesCompactRequest(c *gin.Context, body []byte) bool {
+	return isOpenAIResponsesCompactPath(c) || hasOpenAIResponsesCompactionTrigger(body)
+}
+
+func hasOpenAIResponsesCompactionTrigger(body []byte) bool {
+	return gjson.GetBytes(body, `input.#(type=="compaction_trigger")`).Exists()
+}
+
 func normalizeOpenAICompactRequestBody(body []byte) ([]byte, bool, error) {
 	if len(body) == 0 {
 		return body, false, nil
 	}
 
 	normalized := []byte(`{}`)
-	// Keep the current Codex /compact schema while still dropping request-scoped
-	// fields such as prompt_cache_key, store, and stream.
+	// Keep the current Codex /compact schema while dropping request-scoped fields
+	// such as prompt_cache_key and store. stream is preserved so the gateway can
+	// honour the client's streaming intent (compact 流式时以 SSE 输出单个 compaction_summary item)。
 	for _, field := range []string{
 		"model",
 		"input",
@@ -5595,6 +5789,7 @@ func normalizeOpenAICompactRequestBody(body []byte) ([]byte, bool, error) {
 		"reasoning",
 		"text",
 		"previous_response_id",
+		"stream",
 	} {
 		value := gjson.GetBytes(body, field)
 		if !value.Exists() {
@@ -6493,6 +6688,19 @@ func normalizeOpenAIPassthroughOAuthBody(body []byte, compact bool) ([]byte, boo
 	}
 
 	return normalized, changed, nil
+}
+
+func ensureOpenAIPassthroughInstructions(body []byte) ([]byte, bool, error) {
+	instructions := gjson.GetBytes(body, "instructions")
+	if instructions.Exists() && instructions.Type == gjson.String && strings.TrimSpace(instructions.String()) != "" {
+		return body, false, nil
+	}
+
+	next, err := sjson.SetBytes(body, "instructions", "You are a helpful coding assistant.")
+	if err != nil {
+		return body, false, fmt.Errorf("normalize passthrough body instructions: %w", err)
+	}
+	return next, true, nil
 }
 
 func detectOpenAIPassthroughInstructionsRejectReason(reqModel string, body []byte) string {

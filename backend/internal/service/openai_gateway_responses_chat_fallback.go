@@ -51,6 +51,7 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 	}
 
 	clientStream := responsesReq.Stream
+	compactRequest := isOpenAIResponsesCompactRequest(c, body)
 	reasoningEffort := extractOpenAIReasoningEffortFromBody(body, originalModel)
 	serviceTier := extractOpenAIServiceTierFromBody(body)
 
@@ -68,7 +69,10 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 	billingModel := resolveOpenAIForwardModel(account, originalModel, "")
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
 	chatReq.Model = upstreamModel
-	if clientStream {
+	if compactRequest {
+		chatReq.Stream = false
+		chatReq.StreamOptions = nil
+	} else if clientStream {
 		chatReq.StreamOptions = &apicompat.ChatStreamOptions{IncludeUsage: true}
 	}
 
@@ -198,10 +202,12 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 		return s.handleErrorResponse(ctx, resp, c, account, chatBody, billingModel)
 	}
 
-	if clientStream {
+	// compact 请求需整体重写为单个 compaction_summary item：强制走 buffered（即使客户端流式），
+	// 由 buffered 末尾按 clientStream 以 SSE 或 JSON 输出该 compaction_summary item。
+	if clientStream && !compactRequest {
 		return s.streamChatCompletionsAsResponses(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 	}
-	return s.bufferChatCompletionsAsResponses(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+	return s.bufferChatCompletionsAsResponses(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime, clientStream, compactRequest)
 }
 
 func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(
@@ -213,6 +219,8 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(
 	reasoningEffort *string,
 	serviceTier *string,
 	startTime time.Time,
+	clientStream bool,
+	compactRequest bool,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 	respBody, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
@@ -239,16 +247,24 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(
 		return nil, fmt.Errorf("parse chat completions response: %w", err)
 	}
 	responsesResp := apicompat.ChatCompletionsResponseToResponses(&ccResp, originalModel)
+	if compactRequest {
+		rewriteChatFallbackResponsesAsCompact(responsesResp)
+	}
 
 	usage := OpenAIUsage{}
 	if parsed, ok := extractOpenAIUsageFromJSONBytes(respBody); ok {
 		usage = parsed
 	}
 
-	if s.responseHeaderFilter != nil {
-		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	if clientStream {
+		// compact 流式场景：以 Responses SSE 输出该单个 compaction_summary item，满足 codex 流式解析预期。
+		s.writeAnthropicResponsesAsSSE(c, resp.Header, responsesResp)
+	} else {
+		if s.responseHeaderFilter != nil {
+			responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+		}
+		c.JSON(http.StatusOK, responsesResp)
 	}
-	c.JSON(http.StatusOK, responsesResp)
 
 	return &OpenAIForwardResult{
 		RequestID:       requestID,
@@ -261,6 +277,42 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(
 		Stream:          false,
 		Duration:        time.Since(startTime),
 	}, nil
+}
+
+func rewriteChatFallbackResponsesAsCompact(response *apicompat.ResponsesResponse) {
+	if response == nil {
+		return
+	}
+	response.Object = "response.compaction"
+	response.Output = []apicompat.ResponsesOutput{{
+		Type:             "compaction_summary",
+		EncryptedContent: compactEncryptedContentFromResponsesOutputs(response.Output),
+	}}
+}
+
+func compactEncryptedContentFromResponsesOutputs(outputItems []apicompat.ResponsesOutput) string {
+	messageTexts := make([]string, 0, len(outputItems))
+	reasoningTexts := make([]string, 0, len(outputItems))
+	for _, outputItem := range outputItems {
+		switch outputItem.Type {
+		case "message":
+			for _, contentPart := range outputItem.Content {
+				if strings.TrimSpace(contentPart.Text) != "" {
+					messageTexts = append(messageTexts, strings.TrimSpace(contentPart.Text))
+				}
+			}
+		case "reasoning":
+			for _, summaryPart := range outputItem.Summary {
+				if strings.TrimSpace(summaryPart.Text) != "" {
+					reasoningTexts = append(reasoningTexts, strings.TrimSpace(summaryPart.Text))
+				}
+			}
+		}
+	}
+	if len(messageTexts) > 0 {
+		return strings.Join(messageTexts, "\n\n")
+	}
+	return strings.Join(reasoningTexts, "\n\n")
 }
 
 func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(

@@ -32,11 +32,13 @@ func (s *OpenAIGatewayService) forwardResponsesViaAnthropicResponses(
 	}
 	originalModel := strings.TrimSpace(responsesReq.Model)
 	clientStream := responsesReq.Stream
+	compactRequest := isOpenAIResponsesCompactRequest(c, body)
 
 	anthropicReq, err := apicompat.ResponsesToAnthropicRequest(&responsesReq)
 	if err != nil {
 		return nil, fmt.Errorf("convert responses to anthropic: %w", err)
 	}
+	ensureAnthropicCompactRequestHasMessages(anthropicReq, compactRequest)
 	anthropicReq.Stream = true
 
 	mappedModel := account.GetMappedModel(originalModel)
@@ -120,10 +122,12 @@ func (s *OpenAIGatewayService) forwardResponsesViaAnthropicResponses(
 	defer func() { _ = resp.Body.Close() }()
 
 	reasoningEffort := ExtractResponsesReasoningEffortFromBody(body)
-	if clientStream {
+	// compact 请求需要整体重写为单个 compaction_summary item：统一走 buffered（即使客户端流式），
+	// 在 buffered 末尾按 clientStream 以 SSE 或 JSON 输出该 compaction_summary item。
+	if clientStream && !compactRequest {
 		return s.handleOpenAIAnthropicResponsesStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime)
 	}
-	return s.handleOpenAIAnthropicResponsesBufferedStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime)
+	return s.handleOpenAIAnthropicResponsesBufferedStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime, clientStream, compactRequest)
 }
 
 func (s *OpenAIGatewayService) buildOpenAIAnthropicResponsesUpstreamRequest(
@@ -181,6 +185,8 @@ func (s *OpenAIGatewayService) handleOpenAIAnthropicResponsesBufferedStreamingRe
 	mappedModel string,
 	reasoningEffort *string,
 	startTime time.Time,
+	clientStream bool,
+	compactRequest bool,
 ) (*OpenAIForwardResult, error) {
 	requestID := openAIAnthropicResponsesRequestID(resp.Header)
 
@@ -272,15 +278,26 @@ func (s *OpenAIGatewayService) handleOpenAIAnthropicResponsesBufferedStreamingRe
 
 	responsesResp := apicompat.AnthropicToResponsesResponse(finalResp)
 	responsesResp.Model = originalModel
-
-	if s.responseHeaderFilter != nil {
-		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	// compact 请求：codex remote compaction v2 要求恰好一个 type="compaction_summary" 的 output
+	// item。anthropic 桥接产出的是 reasoning/message 多 item，需重写为单个 compaction_summary item
+	// （对齐 chat fallback 路径 rewriteChatFallbackResponsesAsCompact 的做法）。
+	if compactRequest {
+		rewriteChatFallbackResponsesAsCompact(responsesResp)
 	}
-	if respBytes, err := json.Marshal(responsesResp); err == nil {
-		respBytes = reverseToolNamesIfPresent(c, respBytes)
-		c.Data(http.StatusOK, "application/json; charset=utf-8", respBytes)
+
+	if clientStream {
+		// compact 流式场景：以 Responses SSE 输出该单个 compaction_summary item，满足 codex 流式解析预期。
+		s.writeAnthropicResponsesAsSSE(c, resp.Header, responsesResp)
 	} else {
-		c.JSON(http.StatusOK, responsesResp)
+		if s.responseHeaderFilter != nil {
+			responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+		}
+		if respBytes, err := json.Marshal(responsesResp); err == nil {
+			respBytes = reverseToolNamesIfPresent(c, respBytes)
+			c.Data(http.StatusOK, "application/json; charset=utf-8", respBytes)
+		} else {
+			c.JSON(http.StatusOK, responsesResp)
+		}
 	}
 
 	return &OpenAIForwardResult{
@@ -293,6 +310,22 @@ func (s *OpenAIGatewayService) handleOpenAIAnthropicResponsesBufferedStreamingRe
 		Stream:          false,
 		Duration:        time.Since(startTime),
 	}, nil
+}
+
+func ensureAnthropicCompactRequestHasMessages(req *apicompat.AnthropicRequest, compactRequest bool) {
+	if req == nil || len(req.Messages) > 0 {
+		return
+	}
+	if !compactRequest {
+		req.Messages = []apicompat.AnthropicMessage{}
+		return
+	}
+
+	content, _ := json.Marshal("Create a compact summary of the conversation context for continuing the session. Preserve important user requests, decisions, files, commands, errors, and pending work. If no prior context is available, return a concise empty-context summary.")
+	req.Messages = []apicompat.AnthropicMessage{{
+		Role:    "user",
+		Content: content,
+	}}
 }
 
 func (s *OpenAIGatewayService) handleOpenAIAnthropicResponsesStreamingResponse(
@@ -447,4 +480,41 @@ func openAIAnthropicResponsesRequestID(header http.Header) string {
 		return requestID
 	}
 	return strings.TrimSpace(header.Get("x-request-id"))
+}
+
+// writeAnthropicResponsesAsSSE 以 Responses SSE 形式输出一个完整的 responsesResp，
+// 用于 compact 流式场景：把单个 compaction_summary item 以 codex 期望的流式事件序列输出。
+func (s *OpenAIGatewayService) writeAnthropicResponsesAsSSE(c *gin.Context, upstreamHeader http.Header, resp *apicompat.ResponsesResponse) {
+	if c == nil || resp == nil {
+		return
+	}
+	if s != nil && s.responseHeaderFilter != nil {
+		responseheaders.WriteFilteredHeaders(c.Writer.Header(), upstreamHeader, s.responseHeaderFilter)
+	}
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	c.Writer.WriteHeader(http.StatusOK)
+
+	writeEvt := func(evt apicompat.ResponsesStreamEvent) {
+		sse, err := apicompat.ResponsesEventToSSE(evt)
+		if err != nil {
+			return
+		}
+		out := string(reverseToolNamesIfPresent(c, []byte(sse)))
+		_, _ = fmt.Fprint(c.Writer, out)
+	}
+
+	created := *resp
+	created.Status = "in_progress"
+	created.Output = []apicompat.ResponsesOutput{}
+	writeEvt(apicompat.ResponsesStreamEvent{Type: "response.created", Response: &created})
+	for i := range resp.Output {
+		item := resp.Output[i]
+		writeEvt(apicompat.ResponsesStreamEvent{Type: "response.output_item.added", OutputIndex: i, Item: &item})
+		writeEvt(apicompat.ResponsesStreamEvent{Type: "response.output_item.done", OutputIndex: i, Item: &item})
+	}
+	writeEvt(apicompat.ResponsesStreamEvent{Type: "response.completed", Response: resp})
+	c.Writer.Flush()
 }

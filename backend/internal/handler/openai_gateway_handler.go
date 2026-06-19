@@ -193,6 +193,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	}
 	reqStream := streamResult.Bool()
 	reqLog = reqLog.With(zap.String("model", reqModel), zap.Bool("stream", reqStream))
+	isCompactRequest := service.IsOpenAIResponsesCompactRequest(c, body)
 	previousResponseID := strings.TrimSpace(gjson.GetBytes(body, "previous_response_id").String())
 	if previousResponseID != "" {
 		previousResponseIDKind := service.ClassifyOpenAIPreviousResponseIDKind(previousResponseID)
@@ -208,11 +209,14 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "previous_response_id must be a response.id (resp_*), not a message id")
 			return
 		}
-		reqLog.Warn("openai.request_validation_failed",
-			zap.String("reason", "previous_response_id_requires_wsv2"),
-		)
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "previous_response_id is only supported on Responses WebSocket v2")
-		return
+		if !isCompactRequest {
+			reqLog.Warn("openai.request_validation_failed",
+				zap.String("reason", "previous_response_id_requires_wsv2"),
+			)
+			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "previous_response_id is only supported on Responses WebSocket v2")
+			return
+		}
+		reqLog.Debug("openai.compact_previous_response_id_ignored_for_http")
 	}
 
 	setOpsRequestContext(c, reqModel, reqStream)

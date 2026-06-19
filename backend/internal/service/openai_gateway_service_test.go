@@ -1822,8 +1822,14 @@ func TestNormalizeOpenAICompactRequestBodyPreservesCurrentCodexPayloadFields(t *
 	require.Equal(t, "low", gjson.GetBytes(normalized, "text.verbosity").String())
 	require.Equal(t, "resp_123", gjson.GetBytes(normalized, "previous_response_id").String())
 	require.False(t, gjson.GetBytes(normalized, "store").Exists())
-	require.False(t, gjson.GetBytes(normalized, "stream").Exists())
+	require.True(t, gjson.GetBytes(normalized, "stream").Bool(), "stream should be preserved so the gateway can honour the client's streaming intent")
 	require.False(t, gjson.GetBytes(normalized, "prompt_cache_key").Exists())
+}
+
+func TestHasOpenAIResponsesCompactionTrigger(t *testing.T) {
+	require.True(t, hasOpenAIResponsesCompactionTrigger([]byte(`{"input":[{"type":"message"},{"type":"compaction_trigger"}]}`)))
+	require.False(t, hasOpenAIResponsesCompactionTrigger([]byte(`{"input":[{"type":"message","content":"compact word only"}]}`)))
+	require.False(t, hasOpenAIResponsesCompactionTrigger([]byte(`{"model":"gpt-5.5"}`)))
 }
 
 func TestOpenAIBuildUpstreamRequestOpenAIPassthroughPreservesCompactPath(t *testing.T) {

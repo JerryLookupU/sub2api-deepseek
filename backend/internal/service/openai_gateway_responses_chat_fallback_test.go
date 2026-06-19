@@ -53,6 +53,80 @@ func TestForwardResponses_ForceChatCompletionsRoutesNonStreamingToChatCompletion
 	require.False(t, result.Stream)
 }
 
+func TestForwardResponses_CompactFallbackReturnsSingleCompactionItem(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := []byte(`{"model":"deepseek-v4-flash","input":"compact this conversation","stream":false}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses/compact", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid_compact_chat_json"}},
+		Body: io.NopCloser(strings.NewReader(
+			`{"id":"chatcmpl_compact","object":"chat.completion","model":"deepseek-v4-flash","choices":[{"index":0,"message":{"role":"assistant","reasoning_content":"internal reasoning","content":"compact summary"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14}}`,
+		)),
+	}}
+	svc := &OpenAIGatewayService{
+		cfg:          rawChatCompletionsTestConfig(),
+		httpUpstream: upstream,
+	}
+
+	result, err := svc.Forward(context.Background(), c, forceChatResponsesFallbackAccount(), body)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "http://upstream.example/v1/chat/completions", upstream.lastReq.URL.String())
+	require.Equal(t, "deepseek-v4-flash", gjson.GetBytes(upstream.lastBody, "model").String())
+	require.Equal(t, "response.compaction", gjson.Get(rec.Body.String(), "object").String())
+	require.Equal(t, "compaction_summary", gjson.Get(rec.Body.String(), "output.0.type").String())
+	require.Equal(t, "compact summary", gjson.Get(rec.Body.String(), "output.0.encrypted_content").String())
+	require.False(t, gjson.Get(rec.Body.String(), "output.0.content").Exists())
+	require.False(t, gjson.Get(rec.Body.String(), "output.0.summary").Exists())
+	require.False(t, gjson.Get(rec.Body.String(), "output.1").Exists())
+	require.Equal(t, 10, result.Usage.InputTokens)
+	require.Equal(t, 4, result.Usage.OutputTokens)
+	require.False(t, result.Stream)
+}
+
+func TestForwardResponses_CompactionTriggerStreamingFallbackBuffersUpstreamJSON(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := []byte(`{"model":"deepseek-v4-flash","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"compact this conversation"}]},{"type":"compaction_trigger"}],"stream":true}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid_compact_trigger_chat_json"}},
+		Body: io.NopCloser(strings.NewReader(
+			`{"id":"chatcmpl_compact_trigger","object":"chat.completion","model":"deepseek-v4-flash","choices":[{"index":0,"message":{"role":"assistant","content":"compact trigger summary"},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":5,"total_tokens":16}}`,
+		)),
+	}}
+	svc := &OpenAIGatewayService{
+		cfg:          rawChatCompletionsTestConfig(),
+		httpUpstream: upstream,
+	}
+
+	result, err := svc.Forward(context.Background(), c, forceChatResponsesFallbackAccount(), body)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "http://upstream.example/v1/chat/completions", upstream.lastReq.URL.String())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "stream").Exists(), "compact fallback must request non-streaming upstream JSON before rewriting")
+	require.False(t, gjson.GetBytes(upstream.lastBody, "stream_options").Exists())
+
+	s := rec.Body.String()
+	require.Contains(t, s, "event: response.created")
+	require.Contains(t, s, "event: response.completed")
+	require.Contains(t, s, `"object":"response.compaction"`)
+	require.Contains(t, s, `"type":"compaction_summary"`)
+	require.Contains(t, s, "compact trigger summary")
+	require.False(t, result.Stream)
+}
+
 func TestForwardResponses_ForceChatCompletionsRoutesStreamingToChatCompletions(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

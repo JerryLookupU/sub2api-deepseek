@@ -125,6 +125,7 @@ scripts
 !scripts/
 scripts/*
 !scripts/reload-sub2api-backend-codex-models.sh
+!scripts/start-sub2api-built-canary.sh
 .code-review-state
 #openspec/
 code-reviews/

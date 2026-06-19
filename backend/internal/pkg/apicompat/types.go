@@ -284,7 +284,7 @@ type ResponsesIncompleteDetails struct {
 
 // ResponsesOutput is one output item in a Responses API response.
 type ResponsesOutput struct {
-	Type string `json:"type"` // "message" | "reasoning" | "function_call" | "web_search_call"
+	Type string `json:"type"` // "message" | "reasoning" | "function_call" | "web_search_call" | "compaction_summary"
 
 	// type=message
 	ID      string                 `json:"id,omitempty"`
@@ -292,7 +292,7 @@ type ResponsesOutput struct {
 	Content []ResponsesContentPart `json:"content,omitempty"`
 	Status  string                 `json:"status,omitempty"`
 
-	// type=reasoning
+	// type=reasoning | compaction_summary
 	EncryptedContent string             `json:"encrypted_content,omitempty"`
 	Summary          []ResponsesSummary `json:"summary,omitempty"`
 

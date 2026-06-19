@@ -19,6 +19,11 @@
 | `backend/internal/handler/gateway_handler.go` | 修改 | 在 `GatewayHandler.Models` 中识别 Codex 模型目录请求并返回 Codex schema |
 | `backend/internal/server/routes/gateway.go` | 修改 | 为 `/backend-api/codex/models` 增加路由，复用模型目录处理逻辑 |
 | `backend/internal/handler/gateway_models_test.go` | 修改 | 增加 Codex 模型目录请求的单元测试 |
+| `backend/internal/service/openai_gateway_responses_chat_fallback.go` | 修改 | DeepSeek 不支持原生 compact 时，通过 ChatCompletions fallback 合成 Codex remote compact v2 响应 |
+| `backend/internal/service/openai_gateway_responses_chat_fallback_test.go` | 修改 | 增加 DeepSeek compact fallback 回归测试 |
+| `backend/internal/service/openai_gateway_anthropic_responses.go` | 修改 | DeepSeek Anthropic-compatible fallback 识别 compact trigger，并合成单个 `compaction_summary` |
+| `backend/internal/handler/openai_gateway_handler.go` | 修改 | compact trigger 携带 `previous_response_id` 时不再被 HTTP 续链校验提前拒绝 |
+| `backend/internal/pkg/apicompat/types.go` | 修改 | 补充 `ResponsesOutput` 对 `compaction_summary` output 类型的说明 |
 
 ## 文件级修改说明
 
@@ -147,6 +152,176 @@ codexDirect.GET("/models", h.Gateway.Models)
 - `codexModelSlugsForTest(models []codexModelItemForTest) []string`
   - 从测试响应中提取 slug 列表，便于断言。
 
+### `backend/internal/service/openai_gateway_responses_chat_fallback.go`
+
+补充 DeepSeek 第三方 compact fallback。
+
+#### 背景
+
+DeepSeek 第三方上游不支持原生 `/responses/compact`。Codex 调用 Sub2API 的 `/v1/responses/compact` 时，Sub2API 可以向 DeepSeek 上游发送 `/v1/chat/completions` 生成 compact 摘要，但最终返回给 Codex 的响应必须符合 Codex remote compact v2 schema。
+
+原失败信息：
+
+```text
+remote compaction v2 expected exactly one compaction output item, got 0 from 2 output items
+```
+
+原因是原 ChatCompletions fallback 会调用 `ChatCompletionsResponseToResponses`，输出普通 Responses item，例如：
+
+- `type="reasoning"`
+- `type="message"`
+
+Codex remote compact v2 不把这些当 compact 结果；它期望 `output` 中有且只有一个 `compaction_summary` item。Codex TUI 的 `/compact` 在 v0.141.0 会打普通 `/v1/responses`，并在 `input` 末尾追加 `{"type":"compaction_trigger"}`，因此网关需要同时识别 `/responses/compact` 路径和该 trigger item。
+
+```json
+{
+  "type": "compaction_summary",
+  "encrypted_content": "..."
+}
+```
+
+#### 修改逻辑
+
+`bufferChatCompletionsAsResponses` 在 ChatCompletions 非流式返回转成 Responses 后，新增 compact 请求判断：
+
+```go
+responsesResp := apicompat.ChatCompletionsResponseToResponses(&ccResp, originalModel)
+if compactRequest {
+    rewriteChatFallbackResponsesAsCompact(responsesResp)
+}
+```
+
+#### 新增方法
+
+- `rewriteChatFallbackResponsesAsCompact(response *apicompat.ResponsesResponse)`
+  - 只在 `/responses/compact` 路径或 `/v1/responses` + `compaction_trigger` 请求中使用。
+  - 把普通 `reasoning` / `message` outputs 替换成单个 `type="compaction_summary"` output。
+  - 把响应 `object` 设置为 `response.compaction`，对齐原生 compact 响应形状。
+
+- `compactEncryptedContentFromResponsesOutputs(outputItems []apicompat.ResponsesOutput) string`
+  - 优先从 assistant `message.content[].text` 提取摘要正文。
+  - 如果没有 message 文本，再回退到 `reasoning.summary[].text`。
+  - 这样 DeepSeek 返回 reasoning + content 两个 item 时，最终仍只给 Codex 一个 compact summary item。
+
+#### 行为结果
+
+DeepSeek compact fallback 返回形状变为：
+
+```json
+{
+  "object": "response.compaction",
+  "output": [
+    {
+      "type": "compaction_summary",
+      "encrypted_content": "compact summary"
+    }
+  ]
+}
+```
+
+普通 `/v1/responses` fallback 不受影响，仍返回标准 Responses `message` / `reasoning`。
+
+### `backend/internal/service/openai_gateway_anthropic_responses.go`
+
+补充 DeepSeek Anthropic-compatible compact fallback。
+
+#### 触发场景
+
+Codex TUI v0.141.0 的 `/compact` 可能走普通 `/v1/responses`，并把 `input` 写成只有：
+
+```json
+[
+  { "type": "compaction_trigger" }
+]
+```
+
+这种请求没有可转换成 Anthropic `/v1/messages` 的 user/assistant message。原转换结果会序列化成：
+
+```json
+{
+  "messages": null
+}
+```
+
+DeepSeek Anthropic-compatible 上游会返回：
+
+```text
+messages: invalid type: null, expected a sequence
+```
+
+#### 修改逻辑
+
+- 在发送 Anthropic upstream 前提前判断 compact 请求：
+  - `/v1/responses/compact`
+  - `/v1/responses` + `input[].type == "compaction_trigger"`
+- 如果 compact 请求没有任何 Anthropic message，则补一个最小 user message，避免 `messages:null`。
+- compact 流式请求不直接透传 reasoning/message SSE，而是先 buffer Anthropic SSE，再重写成：
+
+```json
+{
+  "object": "response.compaction",
+  "output": [
+    {
+      "type": "compaction_summary",
+      "encrypted_content": "..."
+    }
+  ]
+}
+```
+
+### `backend/internal/handler/openai_gateway_handler.go`
+
+补充 compact trigger + `previous_response_id` 的兼容。
+
+#### 背景
+
+从 `gpt-5.5` 会话切换到 `deepseek-v4-pro` 后，Codex 的 compact 请求可能携带上一轮 `previous_response_id`。普通 HTTP `/v1/responses` 续链仍然不支持该字段，但 compact fallback 不依赖上游续链 ID，可以忽略它并按当前 input 生成 compact summary。
+
+#### 修改逻辑
+
+- `previous_response_id` 仍然会校验不能是 `msg_*`。
+- 非 compact 请求继续返回原来的 HTTP 400：
+  - `previous_response_id is only supported on Responses WebSocket v2`
+- compact 请求不再被提前拒绝，后续 DeepSeek fallback 会忽略 `previous_response_id` 并返回 `response.compaction`。
+
+### `backend/internal/service/openai_gateway_responses_chat_fallback_test.go`
+
+新增测试：
+
+- `TestForwardResponses_CompactFallbackReturnsSingleCompactionItem`
+- `TestForwardResponses_CompactionTriggerStreamingFallbackBuffersUpstreamJSON`
+
+验证内容：
+
+- `/v1/responses/compact` 仍转发到上游 `/v1/chat/completions`。
+- 上游返回 `reasoning_content` + `content` 时，Sub2API 下游响应只包含一个 output item。
+- `output.0.type == "compaction_summary"`。
+- `output.0.encrypted_content == "compact summary"`。
+- 不再出现 `output.0.content` / `output.0.summary` / `output.1`。
+
+### `backend/internal/service/openai_gateway_anthropic_responses_test.go`
+
+新增测试：
+
+- `TestOpenAIForwardAnthropicResponsesCompactionTriggerOnlyAddsFallbackMessage`
+- `TestOpenAIForwardAnthropicResponsesCompactionTriggerStreamingEmitsSingleCompactionItem`
+
+验证内容：
+
+- `input=[{"type":"compaction_trigger"}]` 不再向上游发送 `messages:null`。
+- 上游请求至少包含一个 Anthropic user message。
+- 下游 SSE 返回 `response.compaction` 和单个 `compaction_summary`。
+
+### `backend/internal/pkg/apicompat/types.go`
+
+补充 `ResponsesOutput.Type` 注释：
+
+```go
+Type string `json:"type"` // "message" | "reasoning" | "function_call" | "web_search_call" | "compaction_summary"
+```
+
+这是文档性补充，避免后续维护者误认为 `compaction_summary` 不是合法 Responses output item。
+
 ## 行为结果
 
 修改完成后，Codex 模型列表行为如下：
@@ -159,6 +334,7 @@ codexDirect.GET("/models", h.Gateway.Models)
 - 普通 `/v1/models` 请求不受 Codex schema 影响。
 - 不需要用户手动维护 `model_catalog_json`。
 - 不会因为自定义 catalog 覆盖掉 Codex 内置 `gpt-5.5`。
+- DeepSeek 第三方 compact 不依赖上游原生 compact 接口；Sub2API 通过 ChatCompletions/Anthropic fallback 合成 Codex 可解析的 `compaction_summary` item。
 
 ## 配套脚本说明
 
@@ -210,6 +386,12 @@ OpenAI-compatible `/v1/models` 常规响应是 `{ "object": "list", "data": [...
 
 修正后：先用 canary 端口验证，再用脚本只重载 backend tmux pane，并在重载后检查 active backend 和模型目录，降低中断风险。
 
+### 问题 6：把 compact 问题误判成上游必须支持原生 compact
+
+DeepSeek 第三方 API 确实不支持原生 `/responses/compact`，但 Codex 的第三方模型 compact 能力不要求上游也提供同名接口。正确做法是：Sub2API 接住 Codex 的 `/v1/responses/compact` 或 `/v1/responses` + `compaction_trigger`，再用上游 `/v1/chat/completions` / Anthropic Messages 生成摘要，最后把响应包装成 Codex remote compact v2 期望的单个 `compaction_summary` output item。
+
+修正后：DeepSeek compact 请求走 ChatCompletions/Anthropic fallback，但返回给 Codex 的 `output` 被重写为单个 `type="compaction_summary"` item，避免 `got 0 from 2 output items`。
+
 ## 验证命令
 
 已执行并通过：
@@ -217,6 +399,10 @@ OpenAI-compatible `/v1/models` 常规响应是 `{ "object": "list", "data": [...
 ```bash
 cd backend && go test ./internal/handler -run GatewayModels
 cd backend && go test ./internal/server/routes -run Gateway
+cd backend && go test ./internal/service -run TestForwardResponses_CompactFallbackReturnsSingleCompactionItem -tags unit -count=1
+cd backend && go test ./internal/service -run 'TestForwardResponses_|TestOpenAI.*Compact|Test.*ResponsesCompact|Test.*Compact.*Mapping|Test.*NormalizeOpenAICompact' -tags unit -count=1
+cd backend && go test ./internal/service -tags unit -count=1
+cd backend && go test ./internal/pkg/apicompat -tags unit -count=1
 ```
 
 运行后验证：
