@@ -702,6 +702,28 @@ func (a *Account) GetOpenAICompactMode() string {
 	return normalizeOpenAICompactMode(mode)
 }
 
+// GetOpenAICompactSystemPrompt returns a per-account override for the compaction
+// system directive injected on the /responses/compact path (extra.compact_system_prompt).
+// Empty means "use the built-in default directive".
+func (a *Account) GetOpenAICompactSystemPrompt() string {
+	if a == nil || a.Extra == nil {
+		return ""
+	}
+	prompt, _ := a.Extra["compact_system_prompt"].(string)
+	return strings.TrimSpace(prompt)
+}
+
+// IsOpenAICompactChunqiuStyle reports whether the account opts into the chunqiu
+// terse-chronicle compaction style (extra.compact_style == "chunqiu"). The style
+// only compresses prose; technical artifacts stay byte-exact per the directive.
+func (a *Account) IsOpenAICompactChunqiuStyle() bool {
+	if a == nil || a.Extra == nil {
+		return false
+	}
+	style, _ := a.Extra["compact_style"].(string)
+	return strings.EqualFold(style, "chunqiu")
+}
+
 // OpenAICompactSupportKnown reports whether compact capability is known for this
 // account and, when known, whether it is supported.
 func (a *Account) OpenAICompactSupportKnown() (supported bool, known bool) {

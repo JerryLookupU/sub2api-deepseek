@@ -55,6 +55,12 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 	reasoningEffort := extractOpenAIReasoningEffortFromBody(body, originalModel)
 	serviceTier := extractOpenAIServiceTierFromBody(body)
 
+	// compact 路径：预截断超大文本/工具输出块（与 anthropic 桥一致，对齐 claw-code-go
+	// buildTranscript 截断 + Claude Code tool-output 压缩层）。
+	if compactRequest {
+		responsesReq.Input = apicompat.TrimResponsesInputForCompaction(responsesReq.Input, apicompat.DefaultCompactionTrimLimits)
+	}
+
 	chatReq, err := apicompat.ResponsesToChatCompletionsRequest(&responsesReq)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -64,6 +70,11 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 			},
 		})
 		return nil, fmt.Errorf("convert responses to chat completions: %w", err)
+	}
+
+	// compact 路径：注入压缩系统指令为前置 system 消息（与 anthropic 桥的 system 注入对齐）。
+	if compactRequest {
+		apicompat.PrependChatSystemDirective(chatReq, resolveOpenAICompactSystemDirective(account))
 	}
 
 	billingModel := resolveOpenAIForwardModel(account, originalModel, "")

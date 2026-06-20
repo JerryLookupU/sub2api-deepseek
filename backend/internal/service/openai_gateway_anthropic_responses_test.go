@@ -341,3 +341,103 @@ func TestOpenAIForwardAnthropicResponsesCompactionTriggerOnlyAddsFallbackMessage
 	require.Contains(t, s, `"type":"compaction_summary"`)
 	require.Contains(t, s, "empty-context summary")
 }
+
+// anthropicCompactDirectiveRecorder runs a /v1/responses/compact request through
+// the anthropic bridge and returns the captured upstream request/recorder so tests
+// can inspect the injected system directive.
+func anthropicCompactDirectiveRecorder(t *testing.T, account *Account, body []byte) *httpUpstreamRecorder {
+	t.Helper()
+	upstreamBody := strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"deepseek-chat","stop_reason":"","usage":{"input_tokens":5,"output_tokens":0}}}`,
+		``,
+		`event: content_block_start`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"compact summary"}}`,
+		``,
+		`event: message_delta`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}`,
+		``,
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n")
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "request-id": []string{"req_ds_dir"}},
+		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
+	}}
+	svc := &OpenAIGatewayService{
+		cfg: &config.Config{
+			Security: config.SecurityConfig{
+				URLAllowlist: config.URLAllowlistConfig{Enabled: false, AllowInsecureHTTP: true},
+			},
+		},
+		httpUpstream: upstream,
+	}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses/compact", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	_, err := svc.Forward(context.Background(), c, account, body)
+	require.NoError(t, err)
+	return upstream
+}
+
+func TestOpenAIForwardAnthropicResponsesCompactInjectsDefaultDirective(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := []byte(`{"model":"deepseek-v4-flash","instructions":"codex rules","input":[{"role":"user","content":[{"type":"input_text","text":"long conversation"}]}],"stream":false}`)
+	account := openAIAnthropicResponsesTestAccount()
+
+	upstream := anthropicCompactDirectiveRecorder(t, account, body)
+
+	sys := gjson.GetBytes(upstream.lastBody, "system").String()
+	require.Contains(t, sys, "codex rules", "Codex instructions must be preserved, not clobbered")
+	require.Contains(t, sys, "context compaction", "default compact directive must be injected")
+	require.Contains(t, sys, "PRESERVE EXACTLY")
+}
+
+func TestOpenAIForwardAnthropicResponsesCompactChunqiuStyleAppendsAddon(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := []byte(`{"model":"deepseek-v4-flash","input":[{"role":"user","content":[{"type":"input_text","text":"long conversation"}]}],"stream":false}`)
+	account := openAIAnthropicResponsesTestAccount()
+	account.Extra["compact_style"] = "chunqiu"
+
+	upstream := anthropicCompactDirectiveRecorder(t, account, body)
+
+	sys := gjson.GetBytes(upstream.lastBody, "system").String()
+	require.Contains(t, sys, "CHUNQIU MODE", "chunqiu addon must be appended when compact_style=chunqiu")
+	require.Contains(t, sys, "context compaction", "default directive still present as the base")
+}
+
+func TestOpenAIForwardAnthropicResponsesCompactCustomPromptOverridesDefault(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := []byte(`{"model":"deepseek-v4-flash","input":[{"role":"user","content":[{"type":"input_text","text":"long conversation"}]}],"stream":false}`)
+	account := openAIAnthropicResponsesTestAccount()
+	account.Extra["compact_system_prompt"] = "MY CUSTOM COMPACT PROMPT"
+
+	upstream := anthropicCompactDirectiveRecorder(t, account, body)
+
+	sys := gjson.GetBytes(upstream.lastBody, "system").String()
+	require.Contains(t, sys, "MY CUSTOM COMPACT PROMPT", "custom prompt must override the built-in default")
+	require.NotContains(t, sys, "context compaction", "built-in default must not leak when custom prompt is set")
+}
+
+func TestOpenAIForwardAnthropicResponsesCompactTrimsLargeInputBlocks(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	long := strings.Repeat("a", 2000)
+	body := []byte(`{"model":"deepseek-v4-flash","input":[{"role":"user","content":[{"type":"input_text","text":"` + long + `"}]}],"stream":false}`)
+	account := openAIAnthropicResponsesTestAccount()
+
+	upstream := anthropicCompactDirectiveRecorder(t, account, body)
+
+	content := gjson.GetBytes(upstream.lastBody, "messages.0.content.0.text").String()
+	require.Contains(t, content, "... [truncated]", "compact path must pre-trim oversized input blocks")
+	require.Less(t, len(content), 2000, "trimmed content must be smaller than the original")
+}
