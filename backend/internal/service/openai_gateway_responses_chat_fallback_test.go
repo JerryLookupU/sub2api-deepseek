@@ -90,6 +90,38 @@ func TestForwardResponses_CompactFallbackReturnsSingleCompactionItem(t *testing.
 	require.False(t, result.Stream)
 }
 
+func TestForwardResponses_CompactFallbackInjectsDirectiveAndTrims(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	long := strings.Repeat("a", 2000)
+	body := []byte(`{"model":"deepseek-v4-flash","input":[{"role":"user","content":[{"type":"input_text","text":"` + long + `"}]}],"stream":false}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses/compact", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid_compact_chat_dir"}},
+		Body: io.NopCloser(strings.NewReader(
+			`{"id":"chatcmpl_dir","object":"chat.completion","model":"deepseek-v4-flash","choices":[{"index":0,"message":{"role":"assistant","content":"compact summary"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14}}`,
+		)),
+	}}
+	svc := &OpenAIGatewayService{
+		cfg:          rawChatCompletionsTestConfig(),
+		httpUpstream: upstream,
+	}
+
+	_, err := svc.Forward(context.Background(), c, forceChatResponsesFallbackAccount(), body)
+	require.NoError(t, err)
+
+	// 压缩指令作为前置 system 消息注入（与 anthropic 桥的 system 注入对齐）
+	require.Equal(t, "system", gjson.GetBytes(upstream.lastBody, "messages.0.role").String())
+	require.Contains(t, gjson.GetBytes(upstream.lastBody, "messages.0.content").String(), "context compaction")
+	// 超长输入被预截断
+	require.Contains(t, gjson.GetBytes(upstream.lastBody, "messages.1.content").String(), "... [truncated]")
+}
+
 func TestForwardResponses_CompactionTriggerStreamingFallbackBuffersUpstreamJSON(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

@@ -18,6 +18,62 @@ import (
 	"go.uber.org/zap"
 )
 
+// defaultAnthropicCompactSystemDirective 是 /responses/compact 路径注入 anthropic
+// system 的默认压缩指令，融合 Claude Code 的"必留/可压"纪律与 chunqiu 的
+// "压缩叙述、技术细节原样保留、纪事体极简"风格，让 deepseek 产出的 compaction
+// summary 既省 token 又足以让后续回合继续会话。
+const defaultAnthropicCompactSystemDirective = `You are performing context compaction: replace the conversation so far with ONE self-contained summary so the session can continue within a limited token budget. The next turn will see ONLY this summary as prior context, so it must be sufficient to continue the work.
+
+OUTPUT: the summary only. No preamble, no "Here is...", no meta-commentary.
+
+PRESERVE EXACTLY (do not compress, paraphrase, or drop):
+- Primary goal and any explicit constraints/preferences the user stated.
+- The most recent user request(s), quoted verbatim.
+- Any prior compaction summary present in the input — carry its key facts forward verbatim; never drop previously compacted context when re-compacting.
+- Active plan, current task, and concrete progress.
+- File paths and the specific edits / diffs / code blocks that matter (keep code verbatim).
+- Exact shell commands, tool calls, and their decisive results.
+- Exact error messages, stack traces, and the fix applied or attempted.
+- Open TODOs, unresolved questions, and explicit next steps.
+- Identifiers: function/variable/type names, API names, config keys, URLs, versions.
+
+COMPRESS HARD (terse, record-style; aim ~60-70% shorter than the original prose):
+- Narrative and connective discussion; exploration that led nowhere.
+- Restatements, pleasantries, already-concluded intermediate reasoning.
+- Large tool outputs and file contents — keep only the conclusion/fact, drop raw text.
+
+STYLE:
+- Dense bullets or short subject-verb-object clauses. Omit filler and modal hedges.
+- Group by labels: Goal / Done / Files / Errors / Next.
+- Technical artifacts stay exact even when everything around them is compressed.
+- Do not let compression become vagueness — keep factual specificity.
+
+EMPTY INPUT: if there is no prior context, output exactly: "Empty context. Awaiting first task."`
+
+// chunqiuAnthropicCompactSystemDirectiveAddon 在 account.extra.compact_style=chunqiu
+// 时追加：把叙述压成春秋纪事体（仅作用于叙述，技术细节仍按 PRESERVE EXACTLY 原样保留）。
+const chunqiuAnthropicCompactSystemDirectiveAddon = `CHUNQIU MODE (applies to prose only, never to technical artifacts):
+- Render narrative as bare chronicle clauses (subject-verb-object), terse and judgment-bearing.
+- Drop explanations; let facts sit as records. Omit conjunctions and discourse markers.
+- Keep all PRESERVE-EXACTLY items byte-for-byte; compress only the prose around them.`
+
+// resolveOpenAICompactSystemDirective 返回 compact 路径要注入的压缩系统指令（anthropic 桥
+// 注入 system、chat-fallback 注入为 system 消息，共用）。优先级：
+// account.GetOpenAICompactSystemPrompt()（自定义覆盖）> 内置默认；
+// 若 account.IsOpenAICompactChunqiuStyle()，再追加春秋纪事体变体。
+func resolveOpenAICompactSystemDirective(account *Account) string {
+	directive := defaultAnthropicCompactSystemDirective
+	if account != nil {
+		if custom := account.GetOpenAICompactSystemPrompt(); custom != "" {
+			directive = custom
+		}
+		if account.IsOpenAICompactChunqiuStyle() {
+			directive = directive + "\n\n" + chunqiuAnthropicCompactSystemDirectiveAddon
+		}
+	}
+	return directive
+}
+
 func (s *OpenAIGatewayService) forwardResponsesViaAnthropicResponses(
 	ctx context.Context,
 	c *gin.Context,
@@ -34,12 +90,25 @@ func (s *OpenAIGatewayService) forwardResponsesViaAnthropicResponses(
 	clientStream := responsesReq.Stream
 	compactRequest := isOpenAIResponsesCompactRequest(c, body)
 
+	// compact 路径：预截断超大文本/工具输出块（对齐 claw-code-go buildTranscript 与
+	// Claude Code 的 tool-output 压缩层），减少送往上游的 token 并聚焦摘要；不改动
+	// compaction_summary/compaction_trigger，且解析失败时原样回退（fail-open）。
+	if compactRequest {
+		responsesReq.Input = apicompat.TrimResponsesInputForCompaction(responsesReq.Input, apicompat.DefaultCompactionTrimLimits)
+	}
+
 	anthropicReq, err := apicompat.ResponsesToAnthropicRequest(&responsesReq)
 	if err != nil {
 		return nil, fmt.Errorf("convert responses to anthropic: %w", err)
 	}
 	ensureAnthropicCompactRequestHasMessages(anthropicReq, compactRequest)
 	anthropicReq.Stream = true
+
+	// compact 路径：注入压缩系统指令（不覆盖 Codex 的 instructions），让上游模型按
+	// "必留技术细节 / 压缩叙述" 规则产出 compaction summary。非 compact 路径不注入。
+	if compactRequest {
+		anthropicReq.System = apicompat.AppendAnthropicSystemDirective(anthropicReq.System, resolveOpenAICompactSystemDirective(account))
+	}
 
 	mappedModel := account.GetMappedModel(originalModel)
 	anthropicReq.Model = mappedModel
@@ -321,7 +390,7 @@ func ensureAnthropicCompactRequestHasMessages(req *apicompat.AnthropicRequest, c
 		return
 	}
 
-	content, _ := json.Marshal("Create a compact summary of the conversation context for continuing the session. Preserve important user requests, decisions, files, commands, errors, and pending work. If no prior context is available, return a concise empty-context summary.")
+	content, _ := json.Marshal("Summarize the conversation context into one compact summary for continuing the session, following the compaction rules in the system instructions. If there is no prior context, reply exactly: Empty context. Awaiting first task.")
 	req.Messages = []apicompat.AnthropicMessage{{
 		Role:    "user",
 		Content: content,

@@ -219,6 +219,24 @@ func mergeResponsesInstructionsIntoAnthropicSystem(instructions string, system j
 	return merged
 }
 
+// AppendAnthropicSystemDirective appends a directive (e.g. a compaction
+// instruction) to an Anthropic request's system field without clobbering any
+// existing system content, which may already carry the client's instructions.
+// An empty directive is a no-op. The system field is a JSON-encoded string
+// (json.RawMessage), so the result remains a valid JSON string.
+func AppendAnthropicSystemDirective(system json.RawMessage, directive string) json.RawMessage {
+	if strings.TrimSpace(directive) == "" {
+		return system
+	}
+	var parts []string
+	if existing := strings.TrimSpace(extractTextFromContent(system)); existing != "" {
+		parts = append(parts, existing)
+	}
+	parts = append(parts, directive)
+	merged, _ := json.Marshal(strings.Join(parts, "\n\n"))
+	return merged
+}
+
 // extractTextFromContent extracts text from a content field that may be a
 // plain string or an array of content parts.
 func extractTextFromContent(raw json.RawMessage) string {
